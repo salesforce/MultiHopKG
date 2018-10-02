@@ -1,6 +1,10 @@
-# -*- coding: utf-8 -*-
 """
-Policy gradient (REINFORCE algorithm) training and inference.
+ Copyright (c) 2018, salesforce.com, inc.
+ All rights reserved.
+ SPDX-License-Identifier: BSD-3-Clause
+ For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
+ 
+ Policy gradient (REINFORCE algorithm) training and inference.
 """
 
 import torch

@@ -1,6 +1,10 @@
-# -*- coding: utf-8 -*-
 """
-Policy gradient with reward shaping.
+ Copyright (c) 2018, salesforce.com, inc.
+ All rights reserved.
+ SPDX-License-Identifier: BSD-3-Clause
+ For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
+ 
+ Policy gradient with reward shaping.
 """
 
 from tqdm import tqdm
