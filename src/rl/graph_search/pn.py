@@ -60,7 +60,8 @@ class GraphSearchPolicy(nn.Module):
             last_r: label of edge traversed in the previous step
             seen_nodes: notes seen on the paths
         :param kg: Knowledge graph environment.
-        :param use_action_space_bucketing: If set, the action space of different nodes are set into buckets.
+        :param use_action_space_bucketing: If set, group the action space of different nodes 
+            into buckets by their sizes.
         :param merge_aspace_batch_outcome: If set, merge the transition probability distribution
             generated of different action space bucket into a single batch.
         :return
