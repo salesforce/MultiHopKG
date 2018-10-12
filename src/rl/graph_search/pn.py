@@ -118,10 +118,13 @@ class GraphSearchPolicy(nn.Module):
             return action_space
 
         if use_action_space_bucketing:
+            """
+            
+            """
             db_outcomes = []
             entropy_list = []
             references = []
-            db_action_spaces, db_references = self.get_batched_action_space(e, obs, kg)
+            db_action_spaces, db_references = self.get_action_space_in_buckets(e, obs, kg)
             for action_space_b, reference_b in zip(db_action_spaces, db_references):
                 X2_b = X2[reference_b, :]
                 action_dist_b, entropy_b = policy_nn_fun(X2_b, action_space_b)
@@ -185,7 +188,40 @@ class GraphSearchPolicy(nn.Module):
 
         self.path.append(self.path_encoder(action_embedding.unsqueeze(1), self.path[-1])[1])
 
-    def get_batched_action_space(self, e, obs, kg, collapse_entities=False):
+    def get_action_space_in_buckets(self, e, obs, kg, collapse_entities=False):
+        """
+        To compute the search operation in batch, we group the action spaces of different states
+        (i.e. the set of outgoing edges of different nodes) into buckets based on their sizes to
+        save the memory consumption of paddings.
+
+        For example, in large knowledge graphs, certain nodes may have thousands of outgoing
+        edges while a long tail of nodes only have a small amount of outgoing edges. If a batch
+        contains a node with 1000 outgoing edges while the rest of the nodes have a maximum of
+        5 outgoing edges, we need to pad the action spaces of all nodes to 1000, which consumes
+        lots of memory.
+
+        With the bucketing approach, paddings are applied to different buckets separately. In
+        this case the node with 1000 outgoing edges will be in its own bucket and the rest of
+        the nodes will suffer little from padding the action space to 5.
+
+        Once we grouped the action spaces in buckets, the policy network computation is carried
+        out for every bucket iteratively. Once all the computation is done, we aggregate the
+        results of different buckets and restore their original order in the batch. The
+        computation outside the policy network module is unaffected.
+
+        :return db_action_spaces:
+            [((r_space_b0, r_space_b0), action_mask_b0),
+             ((r_space_b1, r_space_b1), action_mask_b1),
+             ...
+             ((r_space_bn, r_space_bn), action_mask_bn)]
+
+            A list of action space tensor representations grouped in n buckets, s.t.
+            r_space_b0.size(0) + r_space_b1.size(0) + ... + r_space_bn.size(0) = e.size(0)
+
+        :return db_references:
+            [l_batch_refs0, l_batch_refs1, ..., l_batch_refsn]
+            l_batch_refsi stores the original indices of examples in bucket i in the current batch.
+        """
         e_s, q, e_t, last_step, last_r, seen_nodes = obs
         assert(len(e) == len(last_r))
         assert(len(e) == len(e_s))
@@ -199,30 +235,32 @@ class GraphSearchPolicy(nn.Module):
             entity2bucketid = kg.entity2bucketid[e.tolist()]
             key1 = entity2bucketid[:, 0]
             key2 = entity2bucketid[:, 1]
-            db_ref_dict = {}
+            batch_ref = {}
             for i in range(len(e)):
                 key = int(key1[i])
-                if not key in db_ref_dict:
-                    db_ref_dict[key] = []
-                db_ref_dict[key].append(i)
-            for key in db_ref_dict:
+                if not key in batch_ref:
+                    batch_ref[key] = []
+                batch_ref[key].append(i)
+            for key in batch_ref:
                 action_space = kg.action_space_buckets[key]
-                l_bucket_ids = db_ref_dict[key]
-                db_references.append(l_bucket_ids)
-                g_bucket_ids = key2[l_bucket_ids].tolist()
+                # l_batch_refs: ids of the examples in the current batch of examples
+                # g_bucket_ids: ids of the examples in the corresponding KG action space bucket
+                l_batch_refs = batch_ref[key]
+                g_bucket_ids = key2[l_batch_refs].tolist()
                 r_space_b = action_space[0][0][g_bucket_ids]
                 e_space_b = action_space[0][1][g_bucket_ids]
                 action_mask_b = action_space[1][g_bucket_ids]
-                e_b = e[l_bucket_ids]
-                last_r_b = last_r[l_bucket_ids]
-                e_s_b = e_s[l_bucket_ids]
-                q_b = q[l_bucket_ids]
-                e_t_b = e_t[l_bucket_ids]
-                seen_nodes_b = seen_nodes[l_bucket_ids]
+                e_b = e[l_batch_refs]
+                last_r_b = last_r[l_batch_refs]
+                e_s_b = e_s[l_batch_refs]
+                q_b = q[l_batch_refs]
+                e_t_b = e_t[l_batch_refs]
+                seen_nodes_b = seen_nodes[l_batch_refs]
                 obs_b = [e_s_b, q_b, e_t_b, last_step, last_r_b, seen_nodes_b]
                 action_space_b = ((r_space_b, e_space_b), action_mask_b)
                 action_space_b = self.apply_action_masks(action_space_b, e_b, obs_b, kg)
                 db_action_spaces.append(action_space_b)
+                db_references.append(l_batch_refs)
 
         return db_action_spaces, db_references
 
@@ -255,7 +293,7 @@ class GraphSearchPolicy(nn.Module):
         # action_mask = (1 - stop_mask) * action_mask + stop_mask * (r_space == NO_OP_RELATION_ID).float()
         # Prevent loops
         # Note: avoid duplicate removal of self-loops
-        # seen_nodes_b = seen_nodes[l_bucket_ids]
+        # seen_nodes_b = seen_nodes[l_batch_refs]
         # loop_mask_b = (((seen_nodes_b.unsqueeze(1) == e_space.unsqueeze(2)).sum(2) > 0) *
         #      (r_space != NO_OP_RELATION_ID)).float()
         # action_mask *= (1 - loop_mask_b)
