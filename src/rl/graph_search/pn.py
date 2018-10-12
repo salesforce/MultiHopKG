@@ -200,14 +200,14 @@ class GraphSearchPolicy(nn.Module):
         5 outgoing edges, we need to pad the action spaces of all nodes to 1000, which consumes
         lots of memory.
 
-        With the bucketing approach, paddings are applied to different buckets separately. In
-        this case the node with 1000 outgoing edges will be in its own bucket and the rest of
-        the nodes will suffer little from padding the action space to 5.
+        With the bucketing approach, each bucket is padded separately. In this case the node
+        with 1000 outgoing edges will be in its own bucket and the rest of the nodes will suffer
+        little from padding the action space to 5.
 
         Once we grouped the action spaces in buckets, the policy network computation is carried
-        out for every bucket iteratively. Once all the computation is done, we aggregate the
-        results of different buckets and restore their original order in the batch. The
-        computation outside the policy network module is unaffected.
+        out for every bucket iteratively. Once all the computation is done, we concatenate the
+        results of all buckets and restore their original order in the batch. The computation
+        outside the policy network module is thus unaffected.
 
         :return db_action_spaces:
             [((r_space_b0, r_space_b0), action_mask_b0),
@@ -284,9 +284,6 @@ class GraphSearchPolicy(nn.Module):
             false_negative_mask = self.get_false_negative_mask(e_space, e_s, q, e_t, kg)
             action_mask *= (1 - false_negative_mask)
             self.validate_action_mask(action_mask)
-            if self.training and self.model.endswith('.rsm'):
-                fuzzy_false_negative_mask = self.get_fuzzy_false_negative_mask(e_space, e_s, q, e_t)
-                action_mask *= (1 - fuzzy_false_negative_mask)
 
         # Prevent the agent from stopping in the middle of a path
         # stop_mask = (last_r == NO_OP_RELATION_ID).unsqueeze(1).float()
@@ -337,22 +334,7 @@ class GraphSearchPolicy(nn.Module):
         # sampled the dev set from the training data.
         # assert(float((answer_mask * (e_space == e_t.unsqueeze(1)).long()).sum()) == 0)
         false_negative_mask = (answer_mask * (e_space != e_t.unsqueeze(1)).long()).float()
-        return false_negative_mask
-
-    def get_fuzzy_false_negative_mask(self, e_space, e_s, q, e_t):
-        e_s = ops.tile_along_beam(e_s, e_space.size(1))
-        q = ops.tile_along_beam(q, e_space.size(1))
-        pred_e2 = e_space.view(-1)
-        scores = []
-        b_s = 16000
-        for i in range(0, len(e_s), b_s):
-            score = self.fn.forward_fact(e_s[i:i+b_s], q[i:i+b_s], pred_e2[i:i+b_s], self.fn_kg)
-            scores.append(score.detach())
-        scores = torch.cat(scores).view(len(e_t), -1)
-        # scores = self.fn.forward_fact(e_s, q, pred_e2, self.fn_kg)
-        # scores = scores.view(len(e_t), -1)
-        fuzzy_false_negative_mask = scores * (e_space != e_t.unsqueeze(1)).float()
-        return fuzzy_false_negative_mask
+        return false_negative_masks
 
     def validate_action_mask(self, action_mask):
         action_mask_min = action_mask.min()
