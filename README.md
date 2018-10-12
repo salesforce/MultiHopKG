@@ -81,8 +81,8 @@ For example, the following command performs inference with the RL models (policy
 To change the hyperparameters and other experiment set up, start from the [configuration files](configs).
 
 ### Notes on Implementation Details
-We use mini-batch training in our experiments. To save the amount of paddings (which can cause memory issues and slow down computation for knowledge graphs with nodes with large fan-outs),
-we group the action spaces of different nodes into buckets based on their sizes. Description of the bucket implementation can be founds
+We use mini-batch training in our experiments. To save the amount of paddings (which can cause memory issues and slow down computation for knowledge graphs that contain nodes with large fan-outs),
+we group the action spaces of different nodes into buckets based on their sizes. Description of the bucket implementation can be found
 [here](https://github.com/salesforce/MultiHopKG/blob/master/src/rl/graph_search/pn.py#L193) and 
 [here](https://github.com/salesforce/MultiHopKG/blob/master/src/knowledge_graph.py#L164).
 
