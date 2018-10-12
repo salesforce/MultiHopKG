@@ -92,7 +92,9 @@ class KnowledgeGraph(nn.Module):
             self.vectorize_action_space(data_dir)
 
     def vectorize_action_space(self, data_dir):
-
+        """
+        Pre-process and numericalize the knowledge graph structure.
+        """
         def load_page_rank_scores(input_path):
             pgrk_scores = collections.defaultdict(float)
             with open(input_path) as f:
@@ -106,16 +108,12 @@ class KnowledgeGraph(nn.Module):
         # Sanity check
         num_facts = 0
         out_degrees = collections.defaultdict(int)
-        # out_degree_hist = collections.defaultdict(int)
         for e1 in self.adj_list:
             for r in self.adj_list[e1]:
                 num_facts += len(self.adj_list[e1][r])
                 out_degrees[e1] += len(self.adj_list[e1][r])
-            # out_degree_hist[int(out_degrees[e1] / 10)] += 1
         print("Sanity check: maximum out degree: {}".format(max(out_degrees.values())))
         print('Sanity check: {} facts in knowledge graph'.format(num_facts))
-        # for i in range(max(out_degree_hist.keys())+1):
-        #     print('{}'.format(out_degree_hist[i]))
 
         # load page rank scores
         page_rank_scores = load_page_rank_scores(os.path.join(data_dir, 'raw.pgrk'))
@@ -161,8 +159,10 @@ class KnowledgeGraph(nn.Module):
                     unique_r_space[i, j] = r
             return int_var_cuda(unique_r_space)
 
-        print('Vectorizing action spaces...')
         if self.args.use_action_space_bucketing:
+            """
+            Store action spaces in buckets.
+            """
             self.action_space_buckets = {}
             action_space_buckets_discrete = collections.defaultdict(list)
             self.entity2bucketid = torch.zeros(self.num_entities, 2).long()
@@ -177,6 +177,7 @@ class KnowledgeGraph(nn.Module):
             print('Sanity check: {} facts saved in action table'.format(
                 num_facts_saved_in_action_table - self.num_entities))
             for key in action_space_buckets_discrete:
+                print('Vectorizing action spaces bucket {}...'.format(key))
                 self.action_space_buckets[key] = vectorize_action_space(
                     action_space_buckets_discrete[key], key * self.args.bucket_interval)
         else:
@@ -187,6 +188,7 @@ class KnowledgeGraph(nn.Module):
                 action_space_list.append(action_space)
                 if len(action_space) > max_num_actions:
                     max_num_actions = len(action_space)
+            print('Vectorizing action spaces...')
             self.action_space = vectorize_action_space(action_space_list, max_num_actions)
             
             if self.args.model.startswith('rule'):

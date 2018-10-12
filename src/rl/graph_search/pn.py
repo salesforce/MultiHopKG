@@ -220,7 +220,8 @@ class GraphSearchPolicy(nn.Module):
 
         :return db_references:
             [l_batch_refs0, l_batch_refs1, ..., l_batch_refsn]
-            l_batch_refsi stores the original indices of examples in bucket i in the current batch.
+            l_batch_refsi stores the indices of the examples in bucket i in the current batch,
+            which is used later to restore the output results to the original order.
         """
         e_s, q, e_t, last_step, last_r, seen_nodes = obs
         assert(len(e) == len(last_r))
