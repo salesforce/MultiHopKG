@@ -145,7 +145,7 @@ class ConvE(nn.Module):
         stacked_inputs = self.bn0(stacked_inputs)
 
         X = self.conv1(stacked_inputs)
-        X = self.bn1(X)
+        # X = self.bn1(X)
         X = F.relu(X)
         X = self.FeatureDropout(X)
         X = X.view(-1, self.feat_dim)
@@ -179,7 +179,7 @@ class ConvE(nn.Module):
         stacked_inputs = self.bn0(stacked_inputs)
 
         X = self.conv1(stacked_inputs)
-        X = self.bn1(X)
+        # X = self.bn1(X)
         X = F.relu(X)
         X = self.FeatureDropout(X)
         X = X.view(-1, self.feat_dim)
