@@ -55,7 +55,7 @@ The following embedding-based models are implemented: `distmult`, `complex` and 
 ./experiment-rs.sh configs/<dataset>-rs.sh --train <gpu-ID>
 ```
 
-* Note: To train the RL models using reward shaping, make sure 1) you have pre-trained the embedding based models and 2) set the file path pointers to the pre-trained embedding based models correctly ([example](configs/umls-rs.sh)).
+* Note: To train the RL models using reward shaping, make sure 1) you have pre-trained the embedding-based models and 2) set the file path pointers to the pre-trained embedding-based models correctly ([example configuration file](configs/umls-rs.sh)).
 
 ### Evaluate pretrained models
 To generate the evaluation results of a pre-trained model, simply change the `--train` flag in the commands above to `--inference`. 
