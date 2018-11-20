@@ -335,7 +335,7 @@ class GraphSearchPolicy(nn.Module):
         # sampled the dev set from the training data.
         # assert(float((answer_mask * (e_space == e_t.unsqueeze(1)).long()).sum()) == 0)
         false_negative_mask = (answer_mask * (e_space != e_t.unsqueeze(1)).long()).float()
-        return false_negative_masks
+        return false_negative_mask
 
     def validate_action_mask(self, action_mask):
         action_mask_min = action_mask.min()
