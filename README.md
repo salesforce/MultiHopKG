@@ -10,12 +10,12 @@ Build the docker image
 ```
 docker build -< Dockerfile -t multi_hop_kg:v1.0
 ```
-*The rest of the readme assumes that one spins up a container from the image built and works inside it interactively. If you prefer to run experiments outside a container, please change the commands accordingly.*
 
-Spin up a container and run experiments inside it.
+Spin up a docker container and run experiments inside it.
 ```
 nvidia-docker run -v `pwd`:/workspace/MultiHopKG -it multi_hop_kg:v1.0
 ```
+*The rest of the readme assumes that one works interactively inside a container. If you prefer to run experiments outside a container, please change the commands accordingly.*
 
 #### Mannually Set up 
 Alternatively, you can install Pytorch (>=0.4.1) manually and use the Makefile to set up the rest of the dependencies. 
