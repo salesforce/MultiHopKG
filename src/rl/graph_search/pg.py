@@ -105,7 +105,7 @@ class PolicyGradient(LFramework):
         Perform multi-step rollout from the source entity conditioned on the query relation.
         :param pn: Policy network.
         :param e_s: (Variable:batch) source entity indices.
-        :param q: (Variable:batch) query embedding.
+        :param q: (Variable:batch) query relation indices.
         :param e_t: (Variable:batch) target entity indices.
         :param kg: Knowledge graph environment.
         :param num_steps: Number of rollout steps.
