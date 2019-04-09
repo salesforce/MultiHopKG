@@ -27,6 +27,7 @@ import src.utils.ops as ops
 class LFramework(nn.Module):
     def __init__(self, args, kg, mdl):
         super(LFramework, self).__init__()
+        self.args = args
         self.data_dir = args.data_dir
         self.model_dir = args.model_dir
         self.model = args.model
@@ -126,7 +127,7 @@ class LFramework(nn.Module):
             # Check training statistics
             stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
             if entropies:
-                stdout_msg += 'entropy = {}'.format(np.mean(entropies))
+                stdout_msg += ' entropy = {}'.format(np.mean(entropies))
             print(stdout_msg)
             self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
             if self.run_analysis:
@@ -279,7 +280,7 @@ class LFramework(nn.Module):
         """
         if os.path.isfile(input_file):
             print('=> loading checkpoint \'{}\''.format(input_file))
-            checkpoint = torch.load(input_file)
+            checkpoint = torch.load(input_file, map_location="cuda:{}".format(self.args.gpu))
             self.load_state_dict(checkpoint['state_dict'])
             if not self.inference:
                 self.start_epoch = checkpoint['epoch_id'] + 1

@@ -65,11 +65,11 @@ def hits_and_ranks(examples, scores, all_answers, verbose=False):
     mrr = float(mrr) / len(examples)
 
     if verbose:
-        print('Hits@1 = {}'.format(hits_at_1))
-        print('Hits@3 = {}'.format(hits_at_3))
-        print('Hits@5 = {}'.format(hits_at_5))
-        print('Hits@10 = {}'.format(hits_at_10))
-        print('MRR = {}'.format(mrr))
+        print('Hits@1 = {:.3f}'.format(hits_at_1))
+        print('Hits@3 = {:.3f}'.format(hits_at_3))
+        print('Hits@5 = {:.3f}'.format(hits_at_5))
+        print('Hits@10 = {:.3f}'.format(hits_at_10))
+        print('MRR = {:.3f}'.format(mrr))
 
     return hits_at_1, hits_at_3, hits_at_5, hits_at_10, mrr
 
@@ -124,10 +124,10 @@ def hits_at_k(examples, scores, all_answers, verbose=False):
     hits_at_10 = float(hits_at_10) / len(examples)
 
     if verbose:
-        print('Hits@1 = {}'.format(hits_at_1))
-        print('Hits@3 = {}'.format(hits_at_3))
-        print('Hits@5 = {}'.format(hits_at_5))
-        print('Hits@10 = {}'.format(hits_at_10))
+        print('Hits@1 = {:.3f}'.format(hits_at_1))
+        print('Hits@3 = {:.3f}'.format(hits_at_3))
+        print('Hits@5 = {:.3f}'.format(hits_at_5))
+        print('Hits@10 = {:.3f}'.format(hits_at_10))
 
     return hits_at_1, hits_at_3, hits_at_5, hits_at_10
 
@@ -146,8 +146,8 @@ def hits_and_ranks_by_seen_queries(examples, scores, all_answers, seen_queries, 
     _, _, _, _, seen_mrr = hits_and_ranks(seen_exps, scores[seen_ids], all_answers, verbose=False)
     _, _, _, _, unseen_mrr = hits_and_ranks(unseen_exps, scores[unseen_ids], all_answers, verbose=False)
     if verbose:
-        print('MRR on seen queries: {}'.format(seen_mrr))
-        print('MRR on unseen queries: {}'.format(unseen_mrr))
+        print('MRR on seen queries: {:.3f}'.format(seen_mrr))
+        print('MRR on unseen queries: {:.3f}'.format(unseen_mrr))
     return seen_mrr, unseen_mrr
 
 def hits_and_ranks_by_relation_type(examples, scores, all_answers, relation_by_types, verbose=False):
@@ -166,8 +166,8 @@ def hits_and_ranks_by_relation_type(examples, scores, all_answers, relation_by_t
     _, _, _, _, to_m_mrr = hits_and_ranks(to_M_exps, scores[to_M_ids], all_answers, verbose=False)
     _, _, _, _, to_1_mrr = hits_and_ranks(to_1_exps, scores[to_1_ids], all_answers, verbose=False)
     if verbose:
-        print('MRR on to-M relations: {}'.format(to_m_mrr))
-        print('MRR on to-1 relations: {}'.format(to_1_mrr))
+        print('MRR on to-M relations: {:.3f}'.format(to_m_mrr))
+        print('MRR on to-1 relations: {:.3f}'.format(to_1_mrr))
     return to_m_mrr, to_1_mrr
 
 def link_MAP(examples, scores, labels, all_answers, verbose=False):
@@ -206,7 +206,7 @@ def link_MAP(examples, scores, labels, all_answers, verbose=False):
             aps.append(ap)
     map = np.mean(aps)
     if verbose:
-        print('MAP = {}'.format(map))
+        print('MAP = {:.3f}'.format(map))
     return map
 
 def export_error_cases(examples, scores, all_answers, output_path):
