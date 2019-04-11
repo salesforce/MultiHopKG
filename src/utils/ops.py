@@ -60,10 +60,10 @@ def format_triple(triple, kg):
     e1, e2, r = triple
     rel = kg.id2relation[r] if r != kg.self_edge else '<null>'
     if not rel.endswith('_inv'):
-        return '{}-{}->{}'.format(
+        return '{} -{}-> {}'.format(
             kg.id2entity[e1], rel, kg.id2entity[e2])
     else:
-        return '{}<-{}-{}'.format(
+        return '{} <-{}- {}'.format(
             kg.id2entity[e1], rel, kg.id2entity[e2])
 
 
@@ -82,9 +82,9 @@ def format_path(path_trace, kg):
     for j in range(1, len(path_trace)):
         rel = get_most_recent_relation(j)
         if not rel.endswith('_inv'):
-            path_str += '-{}->'.format(rel)
+            path_str += ' -{}-> '.format(rel)
         else:
-            path_str += '<-{}-'.format(rel[:-4])
+            path_str += ' <-{}- '.format(rel[:-4])
         path_str += get_most_recent_entity(j)
     return path_str
 

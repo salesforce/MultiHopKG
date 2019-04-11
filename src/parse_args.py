@@ -204,7 +204,7 @@ parser.add_argument('--mask_test_false_negatives', type=bool, default=False,
                          'was implemented for sanity checking and was not used in any experiment.)')
 parser.add_argument('--visualize_paths', action='store_true',
                     help='generate path visualizations during inference (default: False)')
-parser.add_argument('--save_paths_to_csv', action='store_true',
+parser.add_argument('--save_beam_search_paths', action='store_true',
                     help='save the decoded path into a CSV file (default: False)')
 
 # Separate Experiments

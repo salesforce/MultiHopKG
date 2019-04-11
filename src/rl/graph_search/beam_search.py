@@ -129,7 +129,7 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
     init_action = (r_s, e_s)
     # path encoder
     pn.initialize_path(init_action, kg)
-    if kg.args.save_paths_to_csv:
+    if kg.args.save_beam_search_paths:
         search_trace = [(r_s, e_s)]
 
     # Run beam search for num_steps
@@ -167,7 +167,7 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
             log_action_probs.append(log_action_prob)
         pn.update_path(action, kg, offset=action_offset)
         seen_nodes = torch.cat([seen_nodes[action_offset], action[1].unsqueeze(1)], dim=1)
-        if kg.args.save_paths_to_csv:
+        if kg.args.save_beam_search_paths:
             adjust_search_trace(search_trace, action_offset)
             search_trace.append(action)
 
@@ -176,6 +176,8 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
     beam_search_output = dict()
     beam_search_output['pred_e2s'] = action[1].view(batch_size, -1)
     beam_search_output['pred_e2_scores'] = log_action_prob.view(batch_size, -1)
+    if kg.args.save_beam_search_paths:
+        beam_search_output['search_traces'] = search_trace
 
     if return_path_components:
         path_width = 10
@@ -189,14 +191,14 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
                     r = kg.id2relation[int(search_trace[k+1][0][ind])]
                     e = kg.id2entity[int(search_trace[k+1][1][ind])]
                     if r.endswith('_inv'):
-                        edge_label = '<-{}-{} {}'.format(r[:-4], e, float(log_action_probs[k][ind]))
+                        edge_label = ' <-{}- {} {}'.format(r[:-4], e, float(log_action_probs[k][ind]))
                     else:
-                        edge_label = '-{}->{} {}'.format(r, e, float(log_action_probs[k][ind]))
+                        edge_label = ' -{}-> {} {}'.format(r, e, float(log_action_probs[k][ind]))
                     top_k_edge_labels.append(edge_label)
                 top_k_action_prob = log_action_prob[:path_width]
                 e_name = kg.id2entity[int(search_trace[1][0][i * output_beam_size])] if k == 0 else ''
                 p_c.append((e_name, top_k_edge_labels, var_to_numpy(top_k_action_prob)))
             path_components_list.append(p_c)
-        beam_search_output = ['path_components_list']
+        beam_search_output['path_components_list'] = path_components_list
 
     return beam_search_output
