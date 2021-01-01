@@ -1,6 +1,8 @@
 # Multi-Hop Knowledge Graph Reasoning with Reward Shaping
 
-This repository contains the source code release of the paper: [Lin et. al. 2018. Multi-Hop Knowledge Graph Reasoning with Reward Shaping](https://arxiv.org/abs/1808.10568).
+This is the official code release of the following paper: 
+
+Xi Victoria Lin, Richard Socher and Caiming Xiong. [Multi-Hop Knowledge Graph Reasoning with Reward Shaping](https://arxiv.org/abs/1808.10568). EMNLP 2018.
 
 ## Quick Start
 
