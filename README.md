@@ -4,6 +4,8 @@ This is the official code release of the following paper:
 
 Xi Victoria Lin, Richard Socher and Caiming Xiong. [Multi-Hop Knowledge Graph Reasoning with Reward Shaping](https://arxiv.org/abs/1808.10568). EMNLP 2018.
 
+<img src="http://victorialin.net/img/multihopkg.png" alt="multihopkg_architecture" width="700" class="center">
+
 ## Quick Start
 
 ### Environment variables & dependencies
