@@ -81,21 +81,21 @@ class GraphSearchPolicy(nn.Module):
         relation_embeddings = kg.get_relation_embeddings(query_relation)
         hide_embeddings = self.path[-1][0][-1, :, :]
         if self.relation_only:
-            X = torch.cat([hide_embeddings, relation_embeddings], dim=-1)
+            state_embeddings = torch.cat([hide_embeddings, relation_embeddings], dim=-1)
         elif self.relation_only_in_path:
             source_entity_embeddings = kg.get_entity_embeddings(source_entity)
             current_entity_embeddings = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([current_entity_embeddings, hide_embeddings, source_entity_embeddings, relation_embeddings], dim=-1)
+            state_embeddings = torch.cat([current_entity_embeddings, hide_embeddings, source_entity_embeddings, relation_embeddings], dim=-1)
         else:
             current_entity_embeddings = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([current_entity_embeddings, hide_embeddings, relation_embeddings], dim=-1)
+            state_embeddings = torch.cat([current_entity_embeddings, hide_embeddings, relation_embeddings], dim=-1)
 
         # MLP
-        X = self.W1(X)
-        X = F.relu(X)
-        X = self.W1Dropout(X)
-        X = self.W2(X)
-        X2 = self.W2Dropout(X)
+        state_embeddings = self.W1(state_embeddings)
+        state_embeddings = F.relu(state_embeddings)
+        state_embeddings = self.W1Dropout(state_embeddings)
+        state_embeddings = self.W2(state_embeddings)
+        state_embeddings = self.W2Dropout(state_embeddings)
 
         def policy_nn_fun(X2, action_space):
             (r_space, e_space), action_mask = action_space
@@ -126,8 +126,8 @@ class GraphSearchPolicy(nn.Module):
             references = []
             db_action_spaces, db_references = self.get_action_space_in_buckets(current_entity, obs, kg)
             for action_space_b, reference_b in zip(db_action_spaces, db_references):
-                X2_b = X2[reference_b, :]
-                action_dist_b, entropy_b = policy_nn_fun(X2_b, action_space_b)
+                temp_state_embeddings = state_embeddings[reference_b, :]
+                action_dist_b, entropy_b = policy_nn_fun(temp_state_embeddings, action_space_b)
                 references.extend(reference_b)
                 db_outcomes.append((action_space_b, action_dist_b))
                 entropy_list.append(entropy_b)
@@ -143,7 +143,7 @@ class GraphSearchPolicy(nn.Module):
                 inv_offset = None
         else:
             action_space = self.get_action_space(current_entity, obs, kg)
-            action_dist, entropy = policy_nn_fun(X2, action_space)
+            action_dist, entropy = policy_nn_fun(state_embeddings, action_space)
             db_outcomes = [(action_space, action_dist)]
             inv_offset = None
 
