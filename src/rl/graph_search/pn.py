@@ -46,17 +46,17 @@ class GraphSearchPolicy(nn.Module):
         self.fn = None
         self.fn_kg = None
 
-    def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
+    def transit(self, current_entity, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         """
         Compute the next action distribution based on
             (a) the current node (entity) in KG and the query relation
             (b) action history representation
-        :param e: agent location (node) at step t.
+        :param current_entity: agent location (node) at step t.
         :param obs: agent observation at step t.
             e_s: source node
             q: query relation
             e_t: target node
-            last_step: If set, the agent is carrying out the last step.
+            is_last_step: If set, the agent is carrying out the last step.
             last_r: label of edge traversed in the previous step
             seen_nodes: notes seen on the paths
         :param kg: Knowledge graph environment.
@@ -75,7 +75,7 @@ class GraphSearchPolicy(nn.Module):
                 action_dist: (Batch) distribution over actions.
                 entropy: (Batch) entropy of action distribution.
         """
-        e_s, q, e_t, last_step, last_r, _ = obs
+        e_s, q, e_t, is_last_step, last_r, seen_nodes = obs
 
         # Representation of the current state (current node and other observations)
         Q = kg.get_relation_embeddings(q)
@@ -84,10 +84,10 @@ class GraphSearchPolicy(nn.Module):
             X = torch.cat([H, Q], dim=-1)
         elif self.relation_only_in_path:
             E_s = kg.get_entity_embeddings(e_s)
-            E = kg.get_entity_embeddings(e)
+            E = kg.get_entity_embeddings(current_entity)
             X = torch.cat([E, H, E_s, Q], dim=-1)
         else:
-            E = kg.get_entity_embeddings(e)
+            E = kg.get_entity_embeddings(current_entity)
             X = torch.cat([E, H, Q], dim=-1)
 
         # MLP
@@ -124,7 +124,7 @@ class GraphSearchPolicy(nn.Module):
             db_outcomes = []
             entropy_list = []
             references = []
-            db_action_spaces, db_references = self.get_action_space_in_buckets(e, obs, kg)
+            db_action_spaces, db_references = self.get_action_space_in_buckets(current_entity, obs, kg)
             for action_space_b, reference_b in zip(db_action_spaces, db_references):
                 X2_b = X2[reference_b, :]
                 action_dist_b, entropy_b = policy_nn_fun(X2_b, action_space_b)
@@ -142,7 +142,7 @@ class GraphSearchPolicy(nn.Module):
                 db_outcomes = [(action_space, action_dist)]
                 inv_offset = None
         else:
-            action_space = self.get_action_space(e, obs, kg)
+            action_space = self.get_action_space(current_entity, obs, kg)
             action_dist, entropy = policy_nn_fun(X2, action_space)
             db_outcomes = [(action_space, action_dist)]
             inv_offset = None
