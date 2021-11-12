@@ -79,16 +79,16 @@ class GraphSearchPolicy(nn.Module):
 
         # Representation of the current state (current node and other observations)
         relation_embeddings = kg.get_relation_embeddings(query_relation)
-        H = self.path[-1][0][-1, :, :]
+        hide_embeddings = self.path[-1][0][-1, :, :]
         if self.relation_only:
-            X = torch.cat([H, relation_embeddings], dim=-1)
+            X = torch.cat([hide_embeddings, relation_embeddings], dim=-1)
         elif self.relation_only_in_path:
             source_entity_embeddings = kg.get_entity_embeddings(source_entity)
             current_entity_embeddings = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([current_entity_embeddings, H, source_entity_embeddings, relation_embeddings], dim=-1)
+            X = torch.cat([current_entity_embeddings, hide_embeddings, source_entity_embeddings, relation_embeddings], dim=-1)
         else:
             current_entity_embeddings = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([current_entity_embeddings, H, relation_embeddings], dim=-1)
+            X = torch.cat([current_entity_embeddings, hide_embeddings, relation_embeddings], dim=-1)
 
         # MLP
         X = self.W1(X)
