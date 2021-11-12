@@ -297,13 +297,13 @@ class GraphSearchPolicy(nn.Module):
         # action_mask *= (1 - loop_mask_b)
         return (r_space, e_space), action_mask
 
-    def get_ground_truth_edge_mask(self, e, r_space, e_space, e_s, q, e_t, kg):
+    def get_ground_truth_edge_mask(self, current_entity, r_space, e_space, source_entity, query_relation, target_entity, kg):
         ground_truth_edge_mask = \
-            ((e == e_s).unsqueeze(1) * (r_space == q.unsqueeze(1)) * (e_space == e_t.unsqueeze(1)))
-        inv_q = kg.get_inv_relation_id(q)
+            ((current_entity == source_entity).unsqueeze(1) * (r_space == query_relation.unsqueeze(1)) * (e_space == target_entity.unsqueeze(1)))
+        inv_q = kg.get_inv_relation_id(query_relation)
         inv_ground_truth_edge_mask = \
-            ((e == e_t).unsqueeze(1) * (r_space == inv_q.unsqueeze(1)) * (e_space == e_s.unsqueeze(1)))
-        return ((ground_truth_edge_mask + inv_ground_truth_edge_mask) * (e_s.unsqueeze(1) != kg.dummy_e)).float()
+            ((current_entity == target_entity).unsqueeze(1) * (r_space == inv_q.unsqueeze(1)) * (e_space == source_entity.unsqueeze(1)))
+        return ((ground_truth_edge_mask + inv_ground_truth_edge_mask) * (source_entity.unsqueeze(1) != kg.dummy_e)).float()
 
     def get_answer_mask(self, e_space, e_s, q, kg):
         if kg.args.mask_test_false_negatives:
