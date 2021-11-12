@@ -140,12 +140,12 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
 
     action = init_action
     for t in range(num_steps):
-        last_r, e = action
+        last_r, current_entity = action
         assert(q.size() == e_s.size())
         assert(q.size() == e_t.size())
-        assert(e.size()[0] % batch_size == 0)
+        assert(current_entity.size()[0] % batch_size == 0)
         assert(q.size()[0] % batch_size == 0)
-        k = int(e.size()[0] / batch_size)
+        k = int(current_entity.size()[0] / batch_size)
         # => [batch_size*k]
         q = ops.tile_along_beam(q.view(batch_size, -1)[:, 0], k)
         e_s = ops.tile_along_beam(e_s.view(batch_size, -1)[:, 0], k)
@@ -153,7 +153,7 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
         obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
         # one step forward in search
         db_outcomes, _, _ = pn.transit(
-            e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=True)
+            current_entity, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=True)
         action_space, action_dist = db_outcomes[0]
         # => [batch_size*k, action_space_size]
         log_action_dist = log_action_prob.view(-1, 1) + ops.safe_log(action_dist)
