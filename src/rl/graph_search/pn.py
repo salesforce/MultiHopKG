@@ -99,9 +99,9 @@ class GraphSearchPolicy(nn.Module):
 
         def policy_nn_fun(state_embeddings, action_space):
             (r_space, e_space), action_mask = action_space
-            A = self.get_action_embedding((r_space, e_space), kg)
+            action_space_embeddings = self.get_action_embedding((r_space, e_space), kg)
             action_dist = F.softmax(
-                torch.squeeze(A @ torch.unsqueeze(state_embeddings, 2), 2) - (1 - action_mask) * ops.HUGE_INT, dim=-1)
+                torch.squeeze(action_space_embeddings @ torch.unsqueeze(state_embeddings, 2), 2) - (1 - action_mask) * ops.HUGE_INT, dim=-1)
             # action_dist = ops.weighted_softmax(torch.squeeze(A @ torch.unsqueeze(X2, 2), 2), action_mask)
             return action_dist, ops.entropy(action_dist)
 
