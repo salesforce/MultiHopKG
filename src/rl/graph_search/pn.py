@@ -223,7 +223,7 @@ class GraphSearchPolicy(nn.Module):
             l_batch_refsi stores the indices of the examples in bucket i in the current batch,
             which is used later to restore the output results to the original order.
         """
-        e_s, q, e_t, last_step, last_r, seen_nodes = obs
+        e_s, q, e_t, is_last_step, last_r, seen_nodes = obs
         assert(len(e) == len(last_r))
         assert(len(e) == len(e_s))
         assert(len(e) == len(q))
@@ -257,7 +257,7 @@ class GraphSearchPolicy(nn.Module):
                 q_b = q[l_batch_refs]
                 e_t_b = e_t[l_batch_refs]
                 seen_nodes_b = seen_nodes[l_batch_refs]
-                obs_b = [e_s_b, q_b, e_t_b, last_step, last_r_b, seen_nodes_b]
+                obs_b = [e_s_b, q_b, e_t_b, is_last_step, last_r_b, seen_nodes_b]
                 action_space_b = ((r_space_b, e_space_b), action_mask_b)
                 action_space_b = self.apply_action_masks(action_space_b, e_b, obs_b, kg)
                 db_action_spaces.append(action_space_b)
@@ -271,18 +271,18 @@ class GraphSearchPolicy(nn.Module):
         action_space = ((r_space, e_space), action_mask)
         return self.apply_action_masks(action_space, e, obs, kg)
 
-    def apply_action_masks(self, action_space, e, obs, kg):
+    def apply_action_masks(self, action_space, current_entity, obs, kg):
         (r_space, e_space), action_mask = action_space
-        e_s, q, e_t, last_step, last_r, seen_nodes = obs
+        source_entity, query_relation, target_entity, is_last_step, last_r, seen_nodes = obs
 
         # Prevent the agent from selecting the ground truth edge
-        ground_truth_edge_mask = self.get_ground_truth_edge_mask(e, r_space, e_space, e_s, q, e_t, kg)
+        ground_truth_edge_mask = self.get_ground_truth_edge_mask(current_entity, r_space, e_space, source_entity, query_relation, target_entity, kg)
         action_mask -= ground_truth_edge_mask
         self.validate_action_mask(action_mask)
 
         # Mask out false negatives in the final step
-        if last_step:
-            false_negative_mask = self.get_false_negative_mask(e_space, e_s, q, e_t, kg)
+        if is_last_step:
+            false_negative_mask = self.get_false_negative_mask(e_space, source_entity, query_relation, target_entity, kg)
             action_mask *= (1 - false_negative_mask)
             self.validate_action_mask(action_mask)
 
