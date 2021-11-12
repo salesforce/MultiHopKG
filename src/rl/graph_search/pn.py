@@ -75,7 +75,7 @@ class GraphSearchPolicy(nn.Module):
                 action_dist: (Batch) distribution over actions.
                 entropy: (Batch) entropy of action distribution.
         """
-        e_s, q, e_t, last_step, last_r, seen_nodes = obs
+        e_s, q, e_t, last_step, last_r, _ = obs
 
         # Representation of the current state (current node and other observations)
         Q = kg.get_relation_embeddings(q)
