@@ -53,9 +53,9 @@ class GraphSearchPolicy(nn.Module):
             (b) action history representation
         :param current_entity: agent location (node) at step t.
         :param obs: agent observation at step t.
-            e_s: source node
-            q: query relation
-            e_t: target node
+            source_entity: source node
+            query_relation: query relation
+            target_entity: target node
             is_last_step: If set, the agent is carrying out the last step.
             last_r: label of edge traversed in the previous step
             seen_nodes: notes seen on the paths
@@ -78,17 +78,17 @@ class GraphSearchPolicy(nn.Module):
         source_entity, query_relation, target_entity, is_last_step, last_r, seen_nodes = obs
 
         # Representation of the current state (current node and other observations)
-        Q = kg.get_relation_embeddings(query_relation)
+        relation_embeddings = kg.get_relation_embeddings(query_relation)
         H = self.path[-1][0][-1, :, :]
         if self.relation_only:
-            X = torch.cat([H, Q], dim=-1)
+            X = torch.cat([H, relation_embeddings], dim=-1)
         elif self.relation_only_in_path:
-            E_s = kg.get_entity_embeddings(source_entity)
-            E = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([E, H, E_s, Q], dim=-1)
+            source_entity_embeddings = kg.get_entity_embeddings(source_entity)
+            current_entity_embeddings = kg.get_entity_embeddings(current_entity)
+            X = torch.cat([current_entity_embeddings, H, source_entity_embeddings, relation_embeddings], dim=-1)
         else:
-            E = kg.get_entity_embeddings(current_entity)
-            X = torch.cat([E, H, Q], dim=-1)
+            current_entity_embeddings = kg.get_entity_embeddings(current_entity)
+            X = torch.cat([current_entity_embeddings, H, relation_embeddings], dim=-1)
 
         # MLP
         X = self.W1(X)
