@@ -13,21 +13,21 @@ import src.utils.ops as ops
 from src.utils.ops import unique_max, var_cuda, zeros_var_cuda, int_var_cuda, int_fill_var_cuda, var_to_numpy
 
 
-def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_components=False):
+def beam_search(pn, source_entity, query_relation, target_entity, kg, num_steps, beam_size, return_path_components=False):
     """
     Beam search from source.
 
     :param pn: Policy network.
-    :param e_s: (Variable:batch) source entity indices.
-    :param q: (Variable:batch) query relation indices.
-    :param e_t: (Variable:batch) target entity indices.
+    :param source_entity: (Variable:batch) source entity indices.
+    :param query_relation: (Variable:batch) query relation indices.
+    :param target_entity: (Variable:batch) target entity indices.
     :param kg: Knowledge graph environment.
     :param num_steps: Number of search steps.
     :param beam_size: Beam size used in search.
     :param return_path_components: If set, return all path components at the end of search.
     """
     assert (num_steps >= 1)
-    batch_size = len(e_s)
+    batch_size = len(source_entity)
 
     def top_k_action(log_action_dist, action_space):
         """
@@ -124,13 +124,13 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
             search_trace[i] = (new_r, new_e)
 
     # Initialization
-    r_s = int_fill_var_cuda(e_s.size(), kg.dummy_start_r)
-    seen_nodes = int_fill_var_cuda(e_s.size(), kg.dummy_e).unsqueeze(1)
-    init_action = (r_s, e_s)
+    r_s = int_fill_var_cuda(source_entity.size(), kg.dummy_start_r)
+    seen_nodes = int_fill_var_cuda(source_entity.size(), kg.dummy_e).unsqueeze(1)
+    init_action = (r_s, source_entity)
     # path encoder
     pn.initialize_path(init_action, kg)
     if kg.args.save_beam_search_paths:
-        search_trace = [(r_s, e_s)]
+        search_trace = [(r_s, source_entity)]
 
     # Run beam search for num_steps
     # [batch_size*k], k=1
@@ -141,16 +141,16 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
     action = init_action
     for t in range(num_steps):
         last_r, current_entity = action
-        assert(q.size() == e_s.size())
-        assert(q.size() == e_t.size())
+        assert(query_relation.size() == source_entity.size())
+        assert(query_relation.size() == target_entity.size())
         assert(current_entity.size()[0] % batch_size == 0)
-        assert(q.size()[0] % batch_size == 0)
+        assert(query_relation.size()[0] % batch_size == 0)
         k = int(current_entity.size()[0] / batch_size)
         # => [batch_size*k]
-        q = ops.tile_along_beam(q.view(batch_size, -1)[:, 0], k)
-        e_s = ops.tile_along_beam(e_s.view(batch_size, -1)[:, 0], k)
-        e_t = ops.tile_along_beam(e_t.view(batch_size, -1)[:, 0], k)
-        obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+        query_relation = ops.tile_along_beam(query_relation.view(batch_size, -1)[:, 0], k)
+        source_entity = ops.tile_along_beam(source_entity.view(batch_size, -1)[:, 0], k)
+        target_entity = ops.tile_along_beam(target_entity.view(batch_size, -1)[:, 0], k)
+        obs = [source_entity, query_relation, target_entity, t == (num_steps - 1), last_r, seen_nodes]
         # one step forward in search
         db_outcomes, _, _ = pn.transit(
             current_entity, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=True)
