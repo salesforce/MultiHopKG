@@ -75,15 +75,15 @@ class GraphSearchPolicy(nn.Module):
                 action_dist: (Batch) distribution over actions.
                 entropy: (Batch) entropy of action distribution.
         """
-        e_s, q, e_t, is_last_step, last_r, seen_nodes = obs
+        source_entity, query_relation, target_entity, is_last_step, last_r, seen_nodes = obs
 
         # Representation of the current state (current node and other observations)
-        Q = kg.get_relation_embeddings(q)
+        Q = kg.get_relation_embeddings(query_relation)
         H = self.path[-1][0][-1, :, :]
         if self.relation_only:
             X = torch.cat([H, Q], dim=-1)
         elif self.relation_only_in_path:
-            E_s = kg.get_entity_embeddings(e_s)
+            E_s = kg.get_entity_embeddings(source_entity)
             E = kg.get_entity_embeddings(current_entity)
             X = torch.cat([E, H, E_s, Q], dim=-1)
         else:
