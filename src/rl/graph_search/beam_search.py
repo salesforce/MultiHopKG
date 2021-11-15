@@ -141,10 +141,12 @@ def beam_search(pn, source_entity, query_relation, target_entity, kg, num_steps,
     action = init_action
     for t in range(num_steps):
         last_r, current_entity = action
+
         assert(query_relation.size() == source_entity.size())
         assert(query_relation.size() == target_entity.size())
         assert(current_entity.size()[0] % batch_size == 0)
         assert(query_relation.size()[0] % batch_size == 0)
+
         k = int(current_entity.size()[0] / batch_size)
         # => [batch_size*k]
         query_relation = ops.tile_along_beam(query_relation.view(batch_size, -1)[:, 0], k)
