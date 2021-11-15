@@ -124,13 +124,13 @@ def beam_search(pn, source_entity, query_relation, target_entity, kg, num_steps,
             search_trace[i] = (new_r, new_e)
 
     # Initialization
-    r_s = int_fill_var_cuda(source_entity.size(), kg.dummy_start_r)
+    start_relation = int_fill_var_cuda(source_entity.size(), kg.dummy_start_r)
     seen_nodes = int_fill_var_cuda(source_entity.size(), kg.dummy_e).unsqueeze(1)
-    init_action = (r_s, source_entity)
+    init_action = (start_relation, source_entity)
     # path encoder
     pn.initialize_path(init_action, kg)
     if kg.args.save_beam_search_paths:
-        search_trace = [(r_s, source_entity)]
+        search_trace = [(start_relation, source_entity)]
 
     # Run beam search for num_steps
     # [batch_size*k], k=1
