@@ -178,6 +178,7 @@ class KnowledgeGraph(nn.Module):
                 num_facts_saved_in_action_table - self.num_entities))
             for key in action_space_buckets_discrete:
                 print('Vectorizing action spaces bucket {}...'.format(key))
+                # key * self.args.bucket_interval 做了一次行动空间的对齐
                 self.action_space_buckets[key] = vectorize_action_space(
                     action_space_buckets_discrete[key], key * self.args.bucket_interval)
         else:
