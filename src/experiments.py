@@ -189,6 +189,7 @@ def construct_model(args):
         lf = PolicyGradient(args, kg, pn)
     elif args.model.startswith('point.rs'):
         pn = GraphSearchPolicy(args)
+        #获取KGE模型
         fn_model = args.model.split('.')[2]
         fn_args = copy.deepcopy(args)
         fn_args.model = fn_model
