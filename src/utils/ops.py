@@ -187,7 +187,7 @@ def pack(l, a):
             l.pop(0)
 
 
-def unique_max(unique_x, x, values, marker_2D=None):
+def unique_max(unique_x, x, values):
     unique_interval = 100
     unique_values, unique_indices = [], []
     # prevent memory explotion during decoding
