@@ -17,7 +17,7 @@ if [[ $group_examples_by_query = *"True"* ]]; then
     group_examples_by_query_flag="--group_examples_by_query"
 fi
 
-cmd="python3 -m src.experiments \
+cmd="python3 -u -m src.experiments \
     --data_dir $data_dir \
     $exp \
     --model $model \
@@ -38,9 +38,11 @@ cmd="python3 -m src.experiments \
     --beam_size $beam_size \
     $group_examples_by_query_flag \
     $add_reversed_training_edges_flag \
-    --gpu $gpu \
-    $ARGS"
+    --gpu $gpu "
 
-echo "Executing $cmd"
+echo $cmd
 
-$cmd
+LOG_FILE="logs/emb_"$model"_GPU_"$gpu".log"
+
+nohup $cmd>$LOG_FILE 2>&1 &
+

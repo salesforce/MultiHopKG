@@ -1,2 +1,8 @@
-tqdm==4.9.0
-matplotlib==2.1.2
+certifi==2021.10.8
+numpy==1.18.5
+pip==21.3.1
+setuptools==58.5.3
+torch==1.9.1+cu111
+tqdm==4.61.1
+typing-extensions==3.10.0.2
+wheel==0.37.0

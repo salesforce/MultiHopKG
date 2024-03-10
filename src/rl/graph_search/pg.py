@@ -199,14 +199,12 @@ class PolicyGradient(LFramework):
         if inv_offset is not None:
             next_r_list = []
             next_e_list = []
-            action_dist_list = []
             action_prob_list = []
             for action_space, action_dist in db_outcomes:
                 sample_outcome = sample(action_space, action_dist)
                 next_r_list.append(sample_outcome['action_sample'][0])
                 next_e_list.append(sample_outcome['action_sample'][1])
                 action_prob_list.append(sample_outcome['action_prob'])
-                action_dist_list.append(action_dist)
             next_r = torch.cat(next_r_list, dim=0)[inv_offset]
             next_e = torch.cat(next_e_list, dim=0)[inv_offset]
             action_sample = (next_r, next_e)
