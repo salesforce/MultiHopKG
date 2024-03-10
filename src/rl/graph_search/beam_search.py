@@ -59,7 +59,7 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
         log_action_prob = log_action_prob.view(-1)
         # *** compute parent offset
         # [batch_size, k]
-        action_beam_offset = action_ind / action_space_size
+        action_beam_offset = action_ind // action_space_size
         # [batch_size, 1]
         action_batch_offset = int_var_cuda(torch.arange(batch_size) * last_k).unsqueeze(1)
         # [batch_size, k] => [batch_size*k]
@@ -102,7 +102,7 @@ def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_component
             k_prime = min(len(unique_e_space_b), k)
             top_unique_log_action_dist, top_unique_idx2 = torch.topk(unique_log_action_dist, k_prime)
             top_unique_idx = unique_idx[top_unique_idx2]
-            top_unique_beam_offset = top_unique_idx / action_space_size
+            top_unique_beam_offset = top_unique_idx // action_space_size
             top_r = r_space_b[top_unique_idx]
             top_e = e_space_b[top_unique_idx]
             next_r_list.append(top_r.unsqueeze(0))
