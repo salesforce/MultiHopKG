@@ -1,2 +1,2 @@
-tqdm==4.9.0
+tqdm==4.66.3
 matplotlib==2.1.2
