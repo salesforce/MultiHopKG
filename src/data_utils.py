@@ -25,6 +25,15 @@ DUMMY_ENTITY_ID = 0
 NO_OP_ENTITY_ID = 1
 
 
+def load_qa_p_path_dataset():
+    """
+    Load Questiion-Answer Plus Path Dataset
+    """
+
+    # TODO:
+
+    return  [qa, path]
+
 def check_answer_ratio(examples):
     entity_dict = {}
     for e1, e2, r in examples:
