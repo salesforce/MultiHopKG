@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "multihopkg"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+package-mode= false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+matplotlib = "^3.9.2"
+torch = "^2.4.1"
+tqdm = "^4.66.5"
+transformers = "^4.44.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
