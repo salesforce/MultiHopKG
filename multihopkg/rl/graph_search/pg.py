@@ -7,12 +7,14 @@
  Policy gradient (REINFORCE algorithm) training and inference.
 """
 
+from typing import List
 import torch
 
 from src.learn_framework import LFramework
 import src.rl.graph_search.beam_search as search
 import src.utils.ops as ops
 from src.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
+from transformers import BertTokenizer, BertModel
 
 
 class PolicyGradient(LFramework):
@@ -100,6 +102,7 @@ class PolicyGradient(LFramework):
 
         return loss_dict
 
+    # LGN: Roll out as in: "Roll out an entire episode.
     def rollout(self, e_s, q, e_t, num_steps, visualize_action_probs=False):
         """
         Perform multi-step rollout from the source entity conditioned on the query relation.
@@ -256,7 +259,7 @@ class PolicyGradient(LFramework):
             path_recorder = self.path_types
             for j in range(path_trace_mat.shape[1]):
                 e = path_trace_mat[i, j]
-                if not e in path_recorder:
+                if e not in path_recorder:
                     if j == path_trace_mat.shape[1] - 1:
                         path_recorder[e] = 1
                         self.num_path_types += 1

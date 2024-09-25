@@ -76,6 +76,8 @@ class LFramework(nn.Module):
 
         for epoch_id in range(self.start_epoch, self.num_epochs):
             print('Epoch {}'.format(epoch_id))
+
+            # Evaluation for each epoch.
             if self.rl_variation_tag.startswith('rs'):
                 # Reward shaping module sanity check:
                 #   Make sure the reward shaping module output value is in the correct range
@@ -199,6 +201,7 @@ class LFramework(nn.Module):
             mini_batch_size = len(mini_batch)
             if len(mini_batch) < self.batch_size:
                 self.make_full_batch(mini_batch, self.batch_size)
+            # LGN: Predict Stuff Here, where mini batch goes
             pred_score = self.predict(mini_batch, verbose=verbose)
             pred_scores.append(pred_score[:mini_batch_size])
         scores = torch.cat(pred_scores)

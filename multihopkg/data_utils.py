@@ -25,7 +25,7 @@ DUMMY_ENTITY_ID = 0
 NO_OP_ENTITY_ID = 1
 
 
-def load_qa_p_path_dataset():
+def load_qa_p_path_dataset(ds_path: str):
     """
     Load Questiion-Answer Plus Path Dataset
     """

@@ -74,6 +74,7 @@ class KnowledgeGraph(nn.Module):
 
     def load_graph_data(self, data_dir):
         # Load indices
+        # QUESTION:  Whrere do we get this entity2id.txt from ?
         self.entity2id, self.id2entity = load_index(os.path.join(data_dir, 'entity2id.txt'))
         print('Sanity check: {} entities loaded'.format(len(self.entity2id)))
         self.type2id, self.id2type = load_index(os.path.join(data_dir, 'type2id.txt'))

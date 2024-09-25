@@ -18,6 +18,7 @@ import random
 import torch
 
 from src.parse_args import parser
+# LG: This immediately parses things. A script basically.
 from src.parse_args import args
 import src.data_utils as data_utils
 import src.eval
@@ -30,6 +31,7 @@ from src.rl.graph_search.pn import GraphSearchPolicy
 from src.rl.graph_search.pg import PolicyGradient
 from src.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from src.utils.ops import flatten
+import pdb
 
 torch.cuda.set_device(args.gpu)
 
@@ -51,6 +53,7 @@ def initialize_model_directory(args, random_seed=None):
 
     reverse_edge_tag = '-RV' if args.add_reversed_training_edges else ''
     entire_graph_tag = '-EG' if args.train_entire_graph else ''
+    
     if args.xavier_initialization:
         initialization_tag = '-xavier'
     elif args.uniform_entity_initialization:
@@ -224,6 +227,7 @@ def train(lf):
     train_data = data_utils.load_triples(
         train_path, entity_index_path, relation_index_path, group_examples_by_query=args.group_examples_by_query,
         add_reverse_relations=args.add_reversed_training_edges)
+    # NELL is a dataset
     if 'NELL' in args.data_dir:
         adj_list_path = os.path.join(args.data_dir, 'adj_list.pkl')
         seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
@@ -595,6 +599,8 @@ def run_experiment(args):
                     initialize_model_directory(args, random_seed)
                     lf = construct_model(args)
                     lf.cuda()
+                    # LFG: Training Entry 🚄
+                    pdb.set_trace()
                     train(lf)
                     metrics = inference(lf)
                     hits_at_1s[random_seed] = metrics['test']['hits_at_1']
