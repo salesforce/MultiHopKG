@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import src.utils.ops as ops
-from src.utils.ops import var_cuda, zeros_var_cuda
+import multihopkg.utils.ops as ops
+from multihopkg.utils.ops import var_cuda, zeros_var_cuda
 
 
 class GraphSearchPolicy(nn.Module):

@@ -19,9 +19,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 
-import src.eval
-from src.utils.ops import var_cuda, zeros_var_cuda
-import src.utils.ops as ops
+import multihopkg.eval
+from multihopkg.utils.ops import var_cuda, zeros_var_cuda
+import multihopkg.utils.ops as ops
 
 
 class LFramework(nn.Module):

@@ -19,18 +19,18 @@ import torch
 
 from src.parse_args import parser
 # LG: This immediately parses things. A script basically.
-from src.parse_args import args
-import src.data_utils as data_utils
-import src.eval
-from src.hyperparameter_range import hp_range
-from src.knowledge_graph import KnowledgeGraph
-from src.emb.fact_network import ComplEx, ConvE, DistMult
-from src.emb.fact_network import get_conve_kg_state_dict, get_complex_kg_state_dict, get_distmult_kg_state_dict
-from src.emb.emb import EmbeddingBasedMethod
-from src.rl.graph_search.pn import GraphSearchPolicy
-from src.rl.graph_search.pg import PolicyGradient
-from src.rl.graph_search.rs_pg import RewardShapingPolicyGradient
-from src.utils.ops import flatten
+from multihopkg.parse_args import args
+import multihopkg.data_utils as data_utils
+import multihopkg.eval
+from multihopkg.hyperparameter_range import hp_range
+from multihopkg.knowledge_graph import KnowledgeGraph
+from multihopkg.emb.fact_network import ComplEx, ConvE, DistMult
+from multihopkg.emb.fact_network import get_conve_kg_state_dict, get_complex_kg_state_dict, get_distmult_kg_state_dict
+from multihopkg.emb.emb import EmbeddingBasedMethod
+from multihopkg.rl.graph_search.pn import GraphSearchPolicy
+from multihopkg.rl.graph_search.pg import PolicyGradient
+from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
+from multihopkg.utils.ops import flatten
 import pdb
 
 torch.cuda.set_device(args.gpu)

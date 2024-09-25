@@ -10,10 +10,10 @@
 from typing import List
 import torch
 
-from src.learn_framework import LFramework
-import src.rl.graph_search.beam_search as search
-import src.utils.ops as ops
-from src.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
+from multihopkg.learn_framework import LFramework
+import multihopkg.rl.graph_search.beam_search as search
+import multihopkg.utils.ops as ops
+from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 from transformers import BertTokenizer, BertModel
 
 
