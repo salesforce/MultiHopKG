@@ -11,115 +11,213 @@
 
 import copy
 import itertools
-import json
-import os
-import random
-import sys
-from argparse import ArgumentParser
-from datetime import datetime
-from pathlib import Path
-
 import numpy as np
-import pandas as pd
-import torch
-# From transformers import general tokenizer
-from transformers import AutoTokenizer, PreTrainedTokenizer
+import os, sys
+import random
 
-import multihopkg.data_utils as data_utils
-import multihopkg.eval
-from multihopkg.emb.emb import EmbeddingBasedMethod
-from multihopkg.emb.fact_network import (ComplEx, ConvE, DistMult,
-                                         get_complex_kg_state_dict,
-                                         get_conve_kg_state_dict,
-                                         get_distmult_kg_state_dict)
-from multihopkg.hyperparameter_range import hp_range
-from multihopkg.knowledge_graph import KnowledgeGraph
+import torch
+
+from src.parse_args import parser
 # LG: This immediately parses things. A script basically.
-from multihopkg.parse_args import args, parser
-from multihopkg.rl.graph_search.pg import PolicyGradient
-from multihopkg.rl.graph_search.pn import GraphSearchPolicy
-from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
-from multihopkg.utils.ops import flatten
-from typing import Any, Dict, Tuple
+from src.parse_args import args
+import src.data_utils as data_utils
+import src.eval
+from src.hyperparameter_range import hp_range
+from src.knowledge_graph import KnowledgeGraph
+from src.emb.fact_network import ComplEx, ConvE, DistMult
+from src.emb.fact_network import get_conve_kg_state_dict, get_complex_kg_state_dict, get_distmult_kg_state_dict
+from src.emb.emb import EmbeddingBasedMethod
+from src.rl.graph_search.pn import GraphSearchPolicy
+from src.rl.graph_search.pg import PolicyGradient
+from src.rl.graph_search.rs_pg import RewardShapingPolicyGradient
+from src.utils.ops import flatten
+import pdb
 
 torch.cuda.set_device(args.gpu)
 
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
 
-
-def process_data(raw_triples_path: str,
-    triples_cache_loc:str,
-    text_tokenizer: PreTrainedTokenizer) \
-    -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    Args:
-        raw_triples_loc (str) : Place where the unprocessed triples are
-        triples_cache_loc (str) : Place where processed triples are
-        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the tripleshttps://www.youtube.com/watch?v=f-sRcVkZ9yg
-        text_tokenizer (AutoTokenizer) : The tokenizer for the text
-    Returns:
-    """
-    if os.path.exists(triples_cache_loc) \
-        and os.path.isfile(triples_cache_loc) \
-        and triples_cache_loc[-4] == ".csv":
-        # Then we simply load it and then exit
-        metadata = json.load(open(triples_cache_loc.replace(".csv", ".json")))
-        return pd.read_csv(triples_cache_loc), metadata
-
-        return something
-
-    ## Processing
-    csv_df = pd.read_csv(raw_triples_path)
-    columns = csv_df.columnes()
-    # Our paths will stop at  the first `question` colum
-    question_col_idx = columns.index("question")
-
-    paths = csv_df.loc[:, columns[:question_col_idx]]
-    num_path_cols = len(paths.columns)
-    text = csv_df.loc[:, columns[question_col_idx:]] # Both Q and A
-
-    # Tokenize the text by applying a pandas map function
-    text = text.apply(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
-
-    # Store the metadata
-    metadata = {"tokenizer": text_tokenizer.name_or_path,
-                "num_columns": len(columns),
-                "question_column": question_col_idx,
-                "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "answer_columns": list(range(question_col_idx, len(columns))),
-                "text_columns": list(range(len(columns)))}
-
-    new_df = pd.concat([paths, text], axis=1)
-    # Save the metadata and the new processed data
-
-    # Hyper Parametsrs name_{value}
-    specific_name = Path(triples_cache_loc) \
-        / f"itl_data-tok_{text_tokenizer.name_or_path}-maxpathlen_{num_path_cols}.csv"
-    new_df.to_csv(specific_name, index=False)
-    with open(triples_cache_loc.replace(".csv", ".json"), "w") as f:
-        json.dump(metadata, f)
-
-    return new_df, metadata
-    
-    # NOTE: Their code here
-    # data_dir = args.data_dir
-    # raw_kb_path = os.path.join(data_dir, 'raw.kb')
-    # train_path = data_utils.get_train_path(args)
-    # dev_path = os.path.join(data_dir, 'dev.triples')
-    # test_path = os.path.join(data_dir, 'test.triples')
-    # data_utils.prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, args.test, args.add_reverse_relations)
+def process_data():
+    data_dir = args.data_dir
+    raw_kb_path = os.path.join(data_dir, 'raw.kb')
+    train_path = data_utils.get_train_path(args)
+    dev_path = os.path.join(data_dir, 'dev.triples')
+    test_path = os.path.join(data_dir, 'test.triples')
+    data_utils.prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, args.test, args.add_reverse_relations)
 
 def initialize_model_directory(args, random_seed=None):
     # add model parameter info to model directory
-    # TODO: We might2ant our implementation of something like this later
+    model_root_dir = args.model_root_dir
+    dataset = os.path.basename(os.path.normpath(args.data_dir))
 
+    reverse_edge_tag = '-RV' if args.add_reversed_training_edges else ''
+    entire_graph_tag = '-EG' if args.train_entire_graph else ''
     
+    if args.xavier_initialization:
+        initialization_tag = '-xavier'
+    elif args.uniform_entity_initialization:
+        initialization_tag = '-uniform'
+    else:
+        initialization_tag = ''
+
+    # Hyperparameter signature
+    if args.model in ['rule']:
+        hyperparam_sig = '{}-{}-{}-{}-{}-{}-{}-{}-{}-{}'.format(
+            args.baseline,
+            args.entity_dim,
+            args.relation_dim,
+            args.history_num_layers,
+            args.learning_rate,
+            args.emb_dropout_rate,
+            args.ff_dropout_rate,
+            args.action_dropout_rate,
+            args.bandwidth,
+            args.beta
+        )
+    elif args.model.startswith('point'):
+        if args.baseline == 'avg_reward':
+            print('* Policy Gradient Baseline: average reward')
+        elif args.baseline == 'avg_reward_normalized':
+            print('* Policy Gradient Baseline: average reward baseline plus normalization')
+        else:
+            print('* Policy Gradient Baseline: None')
+        if args.action_dropout_anneal_interval < 1000:
+            hyperparam_sig = '{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}-{}'.format(
+                args.baseline,
+                args.entity_dim,
+                args.relation_dim,
+                args.history_num_layers,
+                args.learning_rate,
+                args.emb_dropout_rate,
+                args.ff_dropout_rate,
+                args.action_dropout_rate,
+                args.action_dropout_anneal_factor,
+                args.action_dropout_anneal_interval,
+                args.bandwidth,
+                args.beta
+            )
+            if args.mu != 1.0:
+                hyperparam_sig += '-{}'.format(args.mu)
+        else:
+            hyperparam_sig = '{}-{}-{}-{}-{}-{}-{}-{}-{}-{}'.format(
+                args.baseline,
+                args.entity_dim,
+                args.relation_dim,
+                args.history_num_layers,
+                args.learning_rate,
+                args.emb_dropout_rate,
+                args.ff_dropout_rate,
+                args.action_dropout_rate,
+                args.bandwidth,
+                args.beta
+            )
+        if args.reward_shaping_threshold > 0:
+            hyperparam_sig += '-{}'.format(args.reward_shaping_threshold)
+    elif args.model == 'distmult':
+        hyperparam_sig = '{}-{}-{}-{}-{}'.format(
+            args.entity_dim,
+            args.relation_dim,
+            args.learning_rate,
+            args.emb_dropout_rate,
+            args.label_smoothing_epsilon
+        )
+    elif args.model == 'complex':
+        hyperparam_sig = '{}-{}-{}-{}-{}'.format(
+            args.entity_dim,
+            args.relation_dim,
+            args.learning_rate,
+            args.emb_dropout_rate,
+            args.label_smoothing_epsilon
+        )
+    elif args.model in ['conve', 'hypere', 'triplee']:
+        hyperparam_sig = '{}-{}-{}-{}-{}-{}-{}-{}-{}'.format(
+            args.entity_dim,
+            args.relation_dim,
+            args.learning_rate,
+            args.num_out_channels,
+            args.kernel_size,
+            args.emb_dropout_rate,
+            args.hidden_dropout_rate,
+            args.feat_dropout_rate,
+            args.label_smoothing_epsilon
+        )
+    else:
+        raise NotImplementedError
+
+    model_sub_dir = '{}-{}{}{}{}-{}'.format(
+        dataset,
+        args.model,
+        reverse_edge_tag,
+        entire_graph_tag,
+        initialization_tag,
+        hyperparam_sig
+    )
+    if args.model == 'set':
+        model_sub_dir += '-{}'.format(args.beam_size)
+        model_sub_dir += '-{}'.format(args.num_paths_per_entity)
+    if args.relation_only:
+        model_sub_dir += '-ro'
+    elif args.relation_only_in_path:
+        model_sub_dir += '-rpo'
+    elif args.type_only:
+        model_sub_dir += '-to'
+
+    if args.test:
+        model_sub_dir += '-test'
+
+    if random_seed:
+        model_sub_dir += '.{}'.format(random_seed)
+
+    model_dir = os.path.join(model_root_dir, model_sub_dir)
+
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+        print('Model directory created: {}'.format(model_dir))
+    else:
+        print('Model directory exists: {}'.format(model_dir))
+
+    args.model_dir = model_dir
 
 def construct_model(args):
-    # TODO: Get the model constructed well
-    pass
-    
+    """
+    Construct NN graph.
+    """
+    kg = KnowledgeGraph(args)
+    if args.model.endswith('.gc'):
+        kg.load_fuzzy_facts()
+
+    if args.model in ['point', 'point.gc']:
+        pn = GraphSearchPolicy(args)
+        lf = PolicyGradient(args, kg, pn)
+    elif args.model.startswith('point.rs'):
+        pn = GraphSearchPolicy(args)
+        fn_model = args.model.split('.')[2]
+        fn_args = copy.deepcopy(args)
+        fn_args.model = fn_model
+        fn_args.relation_only = False
+        if fn_model == 'complex':
+            fn = ComplEx(fn_args)
+            fn_kg = KnowledgeGraph(fn_args)
+        elif fn_model == 'distmult':
+            fn = DistMult(fn_args)
+            fn_kg = KnowledgeGraph(fn_args)
+        elif fn_model == 'conve':
+            fn = ConvE(fn_args, kg.num_entities)
+            fn_kg = KnowledgeGraph(fn_args)
+        lf = RewardShapingPolicyGradient(args, kg, pn, fn_kg, fn)
+    elif args.model == 'complex':
+        fn = ComplEx(args)
+        lf = EmbeddingBasedMethod(args, kg, fn)
+    elif args.model == 'distmult':
+        fn = DistMult(args)
+        lf = EmbeddingBasedMethod(args, kg, fn)
+    elif args.model == 'conve':
+        fn = ConvE(args, kg.num_entities)
+        lf = EmbeddingBasedMethod(args, kg, fn)
+    else:
+        raise NotImplementedError
+    return lf
 
 def train(lf):
     train_path = data_utils.get_train_path(args)
@@ -245,6 +343,183 @@ def inference(lf):
 
     return eval_metrics
 
+def run_ablation_studies(args):
+    """
+    Run the ablation study experiments reported in the paper.
+    """
+    def set_up_lf_for_inference(args):
+        initialize_model_directory(args)
+        lf = construct_model(args)
+        lf.cuda()
+        lf.batch_size = args.dev_batch_size
+        lf.load_checkpoint(get_checkpoint_path(args))
+        lf.eval()
+        return lf
+
+    def rel_change(metrics, ab_system, kg_portion):
+        ab_system_metrics = metrics[ab_system][kg_portion]
+        base_metrics = metrics['ours'][kg_portion]
+        return int(np.round((ab_system_metrics - base_metrics) / base_metrics * 100))
+
+    entity_index_path = os.path.join(args.data_dir, 'entity2id.txt')
+    relation_index_path = os.path.join(args.data_dir, 'relation2id.txt')
+    if 'NELL' in args.data_dir:
+        adj_list_path = os.path.join(args.data_dir, 'adj_list.pkl')
+        seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
+    else:
+        seen_entities = set()
+    dataset = os.path.basename(args.data_dir)
+    dev_path = os.path.join(args.data_dir, 'dev.triples')
+    dev_data = data_utils.load_triples(
+        dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities, verbose=False)
+    to_m_rels, to_1_rels, (to_m_ratio, to_1_ratio) = data_utils.get_relations_by_type(args.data_dir, relation_index_path)
+    relation_by_types = (to_m_rels, to_1_rels)
+    to_m_ratio *= 100
+    to_1_ratio *= 100
+    seen_queries, (seen_ratio, unseen_ratio) = data_utils.get_seen_queries(args.data_dir, entity_index_path, relation_index_path)
+    seen_ratio *= 100
+    unseen_ratio *= 100
+
+    systems = ['ours', '-ad', '-rs']
+    mrrs, to_m_mrrs, to_1_mrrs, seen_mrrs, unseen_mrrs = {}, {}, {}, {}, {}
+    for system in systems:
+        print('** Evaluating {} system **'.format(system))
+        if system == '-ad':
+            args.action_dropout_rate = 0.0
+            if dataset == 'umls':
+                # adjust dropout hyperparameters
+                args.emb_dropout_rate = 0.3
+                args.ff_dropout_rate = 0.1
+        elif system == '-rs':
+            config_path = os.path.join('configs', '{}.sh'.format(dataset.lower()))
+            args = parser.parse_args()
+            args = data_utils.load_configs(args, config_path)
+        
+        lf = set_up_lf_for_inference(args)
+        pred_scores = lf.forward(dev_data, verbose=False)
+        _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.dev_objects, verbose=True)
+        if to_1_ratio == 0:
+            to_m_mrr = mrr
+            to_1_mrr = -1
+        else:
+            to_m_mrr, to_1_mrr = src.eval.hits_and_ranks_by_relation_type(
+                dev_data, pred_scores, lf.kg.dev_objects, relation_by_types, verbose=True)
+        seen_mrr, unseen_mrr = src.eval.hits_and_ranks_by_seen_queries(
+            dev_data, pred_scores, lf.kg.dev_objects, seen_queries, verbose=True)
+        mrrs[system] = {'': mrr * 100}
+        to_m_mrrs[system] = {'': to_m_mrr * 100}
+        to_1_mrrs[system] = {'': to_1_mrr  * 100}
+        seen_mrrs[system] = {'': seen_mrr * 100}
+        unseen_mrrs[system] = {'': unseen_mrr * 100}
+        _, _, _, _, mrr_full_kg = src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.all_objects, verbose=True)
+        if to_1_ratio == 0:
+            to_m_mrr_full_kg = mrr_full_kg
+            to_1_mrr_full_kg = -1
+        else:
+            to_m_mrr_full_kg, to_1_mrr_full_kg = src.eval.hits_and_ranks_by_relation_type(
+                dev_data, pred_scores, lf.kg.all_objects, relation_by_types, verbose=True)
+        seen_mrr_full_kg, unseen_mrr_full_kg = src.eval.hits_and_ranks_by_seen_queries(
+            dev_data, pred_scores, lf.kg.all_objects, seen_queries, verbose=True)
+        mrrs[system]['full_kg'] = mrr_full_kg * 100
+        to_m_mrrs[system]['full_kg'] = to_m_mrr_full_kg * 100
+        to_1_mrrs[system]['full_kg'] = to_1_mrr_full_kg * 100
+        seen_mrrs[system]['full_kg'] = seen_mrr_full_kg * 100
+        unseen_mrrs[system]['full_kg'] = unseen_mrr_full_kg * 100
+
+    # overall system comparison (table 3)
+    print('Partial graph evaluation')
+    print('--------------------------')
+    print('Overall system performance')
+    print('Ours(ConvE)\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f}'.format(mrrs['ours'][''], mrrs['-rs'][''], mrrs['-ad']['']))
+    print('--------------------------')
+    # performance w.r.t. relation types (table 4, 6)
+    print('Performance w.r.t. relation types')
+    print('\tTo-many\t\t\t\tTo-one\t\t')
+    print('%\tOurs\t-RS\t-AD\t%\tOurs\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})\t{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})'.format(
+        to_m_ratio, to_m_mrrs['ours'][''], to_m_mrrs['-rs'][''], rel_change(to_m_mrrs, '-rs', ''), to_m_mrrs['-ad'][''], rel_change(to_m_mrrs, '-ad', ''),
+        to_1_ratio, to_1_mrrs['ours'][''], to_1_mrrs['-rs'][''], rel_change(to_1_mrrs, '-rs', ''), to_1_mrrs['-ad'][''], rel_change(to_1_mrrs, '-ad', '')))
+    print('--------------------------')
+    # performance w.r.t. seen queries (table 5, 7)
+    print('Performance w.r.t. seen/unseen queries')
+    print('\tSeen\t\t\t\tUnseen\t\t')
+    print('%\tOurs\t-RS\t-AD\t%\tOurs\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})\t{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})'.format(
+        seen_ratio, seen_mrrs['ours'][''], seen_mrrs['-rs'][''], rel_change(seen_mrrs, '-rs', ''), seen_mrrs['-ad'][''], rel_change(seen_mrrs, '-ad', ''),
+        unseen_ratio, unseen_mrrs['ours'][''], unseen_mrrs['-rs'][''], rel_change(unseen_mrrs, '-rs', ''), unseen_mrrs['-ad'][''], rel_change(unseen_mrrs, '-ad', '')))
+    print()
+    print('Full graph evaluation')
+    print('--------------------------')
+    print('Overall system performance')
+    print('Ours(ConvE)\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f}'.format(mrrs['ours']['full_kg'], mrrs['-rs']['full_kg'], mrrs['-ad']['full_kg']))
+    print('--------------------------')
+    print('Performance w.r.t. relation types')
+    print('\tTo-many\t\t\t\tTo-one\t\t')
+    print('%\tOurs\t-RS\t-AD\t%\tOurs\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})\t{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})'.format(
+        to_m_ratio, to_m_mrrs['ours']['full_kg'], to_m_mrrs['-rs']['full_kg'], rel_change(to_m_mrrs, '-rs', 'full_kg'), to_m_mrrs['-ad']['full_kg'], rel_change(to_m_mrrs, '-ad', 'full_kg'),
+        to_1_ratio, to_1_mrrs['ours']['full_kg'], to_1_mrrs['-rs']['full_kg'], rel_change(to_1_mrrs, '-rs', 'full_kg'), to_1_mrrs['-ad']['full_kg'], rel_change(to_1_mrrs, '-ad', 'full_kg')))
+    print('--------------------------')
+    print('Performance w.r.t. seen/unseen queries')
+    print('\tSeen\t\t\t\tUnseen\t\t')
+    print('%\tOurs\t-RS\t-AD\t%\tOurs\t-RS\t-AD')
+    print('{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})\t{:.1f}\t{:.1f}\t{:.1f} ({:d})\t{:.1f} ({:d})'.format(
+        seen_ratio, seen_mrrs['ours']['full_kg'], seen_mrrs['-rs']['full_kg'], rel_change(seen_mrrs, '-rs', 'full_kg'), seen_mrrs['-ad']['full_kg'], rel_change(seen_mrrs, '-ad', 'full_kg'),
+        unseen_ratio, unseen_mrrs['ours']['full_kg'], unseen_mrrs['-rs']['full_kg'], rel_change(unseen_mrrs, '-rs', 'full_kg'), unseen_mrrs['-ad']['full_kg'], rel_change(unseen_mrrs, '-ad', 'full_kg')))
+
+def export_to_embedding_projector(lf):
+    lf.load_checkpoint(get_checkpoint_path(args))
+    lf.export_to_embedding_projector()
+
+def export_reward_shaping_parameters(lf):
+    lf.load_checkpoint(get_checkpoint_path(args))
+    lf.export_reward_shaping_parameters()
+
+def export_fuzzy_facts(lf):
+    lf.load_checkpoint(get_checkpoint_path(args))
+    lf.export_fuzzy_facts()
+
+def export_error_cases(lf):
+    lf.load_checkpoint(get_checkpoint_path(args))
+    lf.batch_size = args.dev_batch_size
+    lf.eval()
+    entity_index_path = os.path.join(args.data_dir, 'entity2id.txt')
+    relation_index_path = os.path.join(args.data_dir, 'relation2id.txt')
+    dev_path = os.path.join(args.data_dir, 'dev.triples')
+    dev_data = data_utils.load_triples(dev_path, entity_index_path, relation_index_path)
+    lf.load_checkpoint(get_checkpoint_path(args))
+    print('Dev set performance:')
+    pred_scores = lf.forward(dev_data, verbose=False)
+    src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.dev_objects, verbose=True)
+    src.eval.export_error_cases(dev_data, pred_scores, lf.kg.dev_objects, os.path.join(lf.model_dir, 'error_cases.pkl'))
+
+def compute_fact_scores(lf):
+    data_dir = args.data_dir
+    train_path = os.path.join(data_dir, 'train.triples')
+    dev_path = os.path.join(data_dir, 'dev.triples')
+    test_path = os.path.join(data_dir, 'test.triples')
+    entity_index_path = os.path.join(args.data_dir, 'entity2id.txt')
+    relation_index_path = os.path.join(args.data_dir, 'relation2id.txt')
+    train_data = data_utils.load_triples(train_path, entity_index_path, relation_index_path)
+    dev_data = data_utils.load_triples(dev_path, entity_index_path, relation_index_path)
+    test_data = data_utils.load_triples(test_path, entity_index_path, relation_index_path)
+    lf.eval()
+    lf.load_checkpoint(get_checkpoint_path(args))
+    train_scores = lf.forward_fact(train_data)
+    dev_scores = lf.forward_fact(dev_data)
+    test_scores = lf.forward_fact(test_data)
+
+    print('Train set average fact score: {}'.format(float(train_scores.mean())))
+    print('Dev set average fact score: {}'.format(float(dev_scores.mean())))
+    print('Test set average fact score: {}'.format(float(test_scores.mean())))
+
+def get_checkpoint_path(args):
+    if not args.checkpoint_path:
+        return os.path.join(args.model_dir, 'model_best.tar')
+    else:
+        return args.checkpoint_path
 
 def load_configs(config_path):
     with open(config_path) as f:
@@ -279,12 +554,23 @@ def load_configs(config_path):
 
 def run_experiment(args):
 
+    if args.test:
+        if 'NELL' in args.data_dir:
+            dataset = os.path.basename(args.data_dir)
+            args.distmult_state_dict_path = data_utils.change_to_test_model_path(dataset, args.distmult_state_dict_path)
+            args.complex_state_dict_path = data_utils.change_to_test_model_path(dataset, args.complex_state_dict_path)
+            args.conve_state_dict_path = data_utils.change_to_test_model_path(dataset, args.conve_state_dict_path)
+        args.data_dir += '.test'
+
     if args.process_data:
+
         # Process knowledge graph data
+
         process_data()
     else:
         with torch.set_grad_enabled(args.train or args.search_random_seed or args.grid_search):
             if args.search_random_seed:
+
                 # Search for best random seed
 
                 # search log file
