@@ -25,5 +25,6 @@ def get_args():
     )
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--seed", type=int, default=420, metavar="S")
+    ap.add_argument("--tokenizer", type=str, default="bert-base-uncased")
 
     return ap.parse_args()

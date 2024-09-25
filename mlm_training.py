@@ -2,8 +2,6 @@
 
 """
  Copyright (c) 2018, salesforce.com, inc.
- All rights reserved.
- SPDX-License-Identifier: BSD-3-Clause
  For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  
  Experiment Portal.
@@ -15,7 +13,6 @@ import json
 import os
 import random
 import sys
-from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
 
@@ -35,17 +32,14 @@ from multihopkg.emb.fact_network import (ComplEx, ConvE, DistMult,
 from multihopkg.hyperparameter_range import hp_range
 from multihopkg.knowledge_graph import KnowledgeGraph
 # LG: This immediately parses things. A script basically.
-from multihopkg.parse_args import args, parser
+from multihopkg.run_configs import alpha
 from multihopkg.rl.graph_search.pg import PolicyGradient
 from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
+from multihopkg.logging import setup_logger
+from multihopkg.utils.setup import set_seeds
 from typing import Any, Dict, Tuple
-
-torch.cuda.set_device(args.gpu)
-
-torch.manual_seed(args.seed)
-torch.cuda.manual_seed_all(args.seed)
 
 
 def process_data(raw_triples_path: str,
@@ -277,209 +271,54 @@ def load_configs(config_path):
                 raise ValueError('Unrecognized argument: {}'.format(arg_name))
     return args
 
-def run_experiment(args):
 
-    if args.process_data:
-        # Process knowledge graph data
-        process_data()
-    else:
-        with torch.set_grad_enabled(args.train or args.search_random_seed or args.grid_search):
-            if args.search_random_seed:
-                # Search for best random seed
 
-                # search log file
-                task = os.path.basename(os.path.normpath(args.data_dir))
-                out_log = '{}.{}.rss'.format(task, args.model)
-                o_f = open(out_log, 'w')
 
-                print('** Search Random Seed **')
-                o_f.write('** Search Random Seed **\n')
-                o_f.close()
-                num_runs = 5
+def initial_setup():
+    # Setup Args
+    args = alpha.get_args()
+    args = alpha.get_args()
+    # Setup GPU
+    torch.cuda.set_device(args.gpu)
 
-                hits_at_1s = {}
-                hits_at_10s = {}
-                mrrs = {}
-                mrrs_search = {}
-                for i in range(num_runs):
+    # Setup Seed
+    set_seeds(args.seed)
 
-                    o_f = open(out_log, 'a')
+    # Get Tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
-                    random_seed = random.randint(0, 1e16)
-                    print("\nRandom seed = {}\n".format(random_seed))
-                    o_f.write("\nRandom seed = {}\n\n".format(random_seed))
-                    torch.manual_seed(random_seed)
-                    torch.cuda.manual_seed_all(args, random_seed)
-                    initialize_model_directory(args, random_seed)
-                    lf = construct_model(args)
-                    lf.cuda()
-                    # LFG: Training Entry 🚄
-                    pdb.set_trace()
-                    train(lf)
-                    metrics = inference(lf)
-                    hits_at_1s[random_seed] = metrics['test']['hits_at_1']
-                    hits_at_10s[random_seed] = metrics['test']['hits_at_10']
-                    mrrs[random_seed] = metrics['test']['mrr']
-                    mrrs_search[random_seed] = metrics['dev']['mrr']
-                    # print the results of the hyperparameter combinations searched so far
-                    print('------------------------------------------')
-                    print('Random Seed\t@1\t@10\tMRR')
-                    for key in hits_at_1s:
-                        print('{}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
-                            key, hits_at_1s[key], hits_at_10s[key], mrrs[key]))
-                    print('------------------------------------------')
-                    o_f.write('------------------------------------------\n')
-                    o_f.write('Random Seed\t@1\t@10\tMRR\n')
-                    for key in hits_at_1s:
-                        o_f.write('{}\t{:.3f}\t{:.3f}\t{:.3f}\n'.format(
-                            key, hits_at_1s[key], hits_at_10s[key], mrrs[key]))
-                    o_f.write('------------------------------------------\n')
+    return args, tokenizer
 
-                    # compute result variance
-                    import numpy as np
-                    hits_at_1s_ = list(hits_at_1s.values())
-                    hits_at_10s_ = list(hits_at_10s.values())
-                    mrrs_ = list(mrrs.values())
-                    print('Hits@1 mean: {:.3f}\tstd: {:.6f}'.format(np.mean(hits_at_1s_), np.std(hits_at_1s_)))
-                    print('Hits@10 mean: {:.3f}\tstd: {:.6f}'.format(np.mean(hits_at_10s_), np.std(hits_at_10s_)))
-                    print('MRR mean: {:.3f}\tstd: {:.6f}'.format(np.mean(mrrs_), np.std(mrrs_)))
-                    o_f.write('Hits@1 mean: {:.3f}\tstd: {:.6f}\n'.format(np.mean(hits_at_1s_), np.std(hits_at_1s_)))
-                    o_f.write('Hits@10 mean: {:.3f}\tstd: {:.6f}\n'.format(np.mean(hits_at_10s_), np.std(hits_at_10s_)))
-                    o_f.write('MRR mean: {:.3f}\tstd: {:.6f}\n'.format(np.mean(mrrs_), np.std(mrrs_)))
-                    o_f.close()
-                    
-                # find best random seed
-                best_random_seed, best_mrr = sorted(mrrs_search.items(), key=lambda x: x[1], reverse=True)[0]
-                print('* Best Random Seed = {}'.format(best_random_seed))
-                print('* @1: {:.3f}\t@10: {:.3f}\tMRR: {:.3f}'.format(
-                    hits_at_1s[best_random_seed],
-                    hits_at_10s[best_random_seed],
-                    mrrs[best_random_seed]))
-                with open(out_log, 'a'):
-                    o_f.write('* Best Random Seed = {}\n'.format(best_random_seed))
-                    o_f.write('* @1: {:.3f}\t@10: {:.3f}\tMRR: {:.3f}\n'.format(
-                        hits_at_1s[best_random_seed],
-                        hits_at_10s[best_random_seed],
-                        mrrs[best_random_seed])
-                    )
-                    o_f.close()
+def run_experiment(args: argparse.Namespace, tokenizer: PreTrainedTokenizer):
+    # By default we run the config
+    # Process data will determine by itself if there is any data to process
+    process_data(args.QAtriplets_raw_dir, args.QAtriplets_cache_dir, tokenizer)
 
-            elif args.grid_search:
+    # TODO: Maybe re-enable this logic later
+    # with torch.set_grad_enabled(args.train or args.search_random_seed or args.grid_search):
 
-                # Grid search
 
-                # search log file
-                task = os.path.basename(os.path.normpath(args.data_dir))
-                out_log = '{}.{}.gs'.format(task, args.model)
-                o_f = open(out_log, 'w')
+    o_f = open(out_log, 'a')
 
-                print("** Grid Search **")
-                o_f.write("** Grid Search **\n")
-                hyperparameters = args.tune.split(',')
+    random_seed = random.randint(0, 1e16)
 
-                if args.tune == '' or len(hyperparameters) < 1:
-                    print("No hyperparameter specified.")
-                    sys.exit(0)
+    torch.manual_seed(random_seed)
 
-                grid = hp_range[hyperparameters[0]]
-                for hp in hyperparameters[1:]:
-                    grid = itertools.product(grid, hp_range[hp])
+    torch.cuda.manual_seed_all(args, random_seed)
 
-                hits_at_1s = {}
-                hits_at_10s = {}
-                mrrs = {}
-                grid = list(grid)
-                print('* {} hyperparameter combinations to try'.format(len(grid)))
-                o_f.write('* {} hyperparameter combinations to try\n'.format(len(grid)))
-                o_f.close()
+    initialize_model_directory(args, random_seed)
 
-                for i, grid_entry in enumerate(list(grid)):
+    # TODO: 
+    lf = construct_model(args)
+    lf.cuda()
 
-                    o_f = open(out_log, 'a')
+    # TODO: LFG: Training Entry 🚄
+    train(lf)
 
-                    if not (type(grid_entry) is list or type(grid_entry) is list):
-                        grid_entry = [grid_entry]
-                    grid_entry = flatten(grid_entry)
-                    print('* Hyperparameter Set {}:'.format(i))
-                    o_f.write('* Hyperparameter Set {}:\n'.format(i))
-                    signature = ''
-                    for j in range(len(grid_entry)):
-                        hp = hyperparameters[j]
-                        value = grid_entry[j]
-                        if hp == 'bandwidth':
-                            setattr(args, hp, int(value))
-                        else:
-                            setattr(args, hp, float(value))
-                        signature += ':{}'.format(value)
-                        print('* {}: {}'.format(hp, value))
-                    initialize_model_directory(args)
-                    lf = construct_model(args)
-                    lf.cuda()
-                    train(lf)
-                    metrics = inference(lf)
-                    hits_at_1s[signature] = metrics['dev']['hits_at_1']
-                    hits_at_10s[signature] = metrics['dev']['hits_at_10']
-                    mrrs[signature] = metrics['dev']['mrr']
-                    # print the results of the hyperparameter combinations searched so far
-                    print('------------------------------------------')
-                    print('Signature\t@1\t@10\tMRR')
-                    for key in hits_at_1s:
-                        print('{}\t{:.3f}\t{:.3f}\t{:.3f}'.format(
-                            key, hits_at_1s[key], hits_at_10s[key], mrrs[key]))
-                    print('------------------------------------------\n')
-                    o_f.write('------------------------------------------\n')
-                    o_f.write('Signature\t@1\t@10\tMRR\n')
-                    for key in hits_at_1s:
-                        o_f.write('{}\t{:.3f}\t{:.3f}\t{:.3f}\n'.format(
-                            key, hits_at_1s[key], hits_at_10s[key], mrrs[key]))
-                    o_f.write('------------------------------------------\n')
-                    # find best hyperparameter set
-                    best_signature, best_mrr = sorted(mrrs.items(), key=lambda x:x[1], reverse=True)[0]
-                    print('* best hyperparameter set')
-                    o_f.write('* best hyperparameter set\n')
-                    best_hp_values = best_signature.split(':')[1:]
-                    for i, value in enumerate(best_hp_values):
-                        hp_name = hyperparameters[i]
-                        hp_value = best_hp_values[i]
-                        print('* {}: {}'.format(hp_name, hp_value))
-                    print('* @1: {:.3f}\t@10: {:.3f}\tMRR: {:.3f}'.format(
-                        hits_at_1s[best_signature],
-                        hits_at_10s[best_signature],
-                        mrrs[best_signature]
-                    ))
-                    o_f.write('* @1: {:.3f}\t@10: {:.3f}\tMRR: {:.3f}\ns'.format(
-                        hits_at_1s[best_signature],
-                        hits_at_10s[best_signature],
-                        mrrs[best_signature]
-                    ))
 
-                    o_f.close()
-
-            elif args.run_ablation_studies:
-                run_ablation_studies(args)
-            else:
-                initialize_model_directory(args)
-                lf = construct_model(args)
-                lf.cuda()
-
-                if args.train:
-                    train(lf)
-                elif args.inference:
-                    inference(lf)
-                elif args.eval_by_relation_type:
-                    inference(lf)
-                elif args.eval_by_seen_queries:
-                    inference(lf)
-                elif args.export_to_embedding_projector:
-                    export_to_embedding_projector(lf)
-                elif args.export_reward_shaping_parameters:
-                    export_reward_shaping_parameters(lf)
-                elif args.compute_fact_scores:
-                    compute_fact_scores(lf)
-                elif args.export_fuzzy_facts:
-                    export_fuzzy_facts(lf)
-                elif args.export_error_cases:
-                    export_error_cases(lf)
+    # TODO: Evaluation of the model
+    metrics = inference(lf)
 
 if __name__ == '__main__':
-    run_experiment(args)
+    args, tokenizer = initial_setup()
+    run_experiment(args, tokenizer)
