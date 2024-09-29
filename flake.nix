@@ -82,11 +82,12 @@
 
           shellHook = ''
             export SHELL=${pkgs.zsh}/bin/zsh
-            export INDEVSHELL=1
+            export INFLAKE="RUN"
             echo "Welcome to the ITL Benchmarking Environment."
             source ./scripts/initialize_scripts.sh
             echo -e "\033[0;32mYou have been logged in as $ACCOUNT_NAME\033[0m"
-            zsh
+             export RPROMPT="%F{cyan}(󱄅dev)%f"
+            exec zsh
           '';
       };
 
@@ -97,6 +98,10 @@
         # Use this shell for changes to pyproject.toml and poetry.lock.
         devShells.poetry = pkgs.mkShell {
           packages = [ pkgs.poetry ];
+          shellHook = ''
+             export RPROMPT="%F{cyan}(󱄅Poetry)%f"
+             exec zsh
+          '';
         };
       });
 }
