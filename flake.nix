@@ -13,8 +13,31 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         # see https://github.com/nix-community/poetry2nix/tree/master#api for more functions and examples.
-        pkgs = nixpkgs.legacyPackages.${system};
+        # pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs { 
+          config.allowUnfree = true;
+          cudaSupport = true;
+          inherit 
+            system;
+        };
+        # customPythonPackages = pkgs.python310.pkgs.extend (pythonSelf: pythonSuper: {
+        #   pytorch = pythonSuper.pytorch.override {
+        #     cudaSupport = true;
+        #     cudatoolkit = pkgs.cudaPackages.cudatoolkit;
+        #   };
+        # });
+
+        libs = [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.xorg.libX11
+          pkgs.ncurses5
+          pkgs.libGL
+          pkgs.libzip
+          pkgs.glib
+        ];
+
         poetry2nix = inputs.poetry2nix.lib.mkPoetry2Nix { inherit pkgs; };
+
         env = poetry2nix.mkPoetryEnv {
           projectDir = ./.;
           editablePackageSources = {
@@ -24,25 +47,13 @@
           preferWheels = true;
           overrides = poetry2nix.overrides.withDefaults (
             final: prev: {
-              pyarrow = prev.pyarrow.override{
-                preferWheel = true;
-              };
               maturin = prev.maturin.overrideAttrs(old: {
                 nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.cargo pkgs.rustc ];
               });
-              jiter = prev.jiter.override {
+              safetensors = prev.safetensors.override {
                 preferWheel = true;
               };
-              tiktoken = prev.tiktoken.override {
-                preferWheel = true;
-              };
-              langchain-openai = prev.langchain-openai.override {
-                preferWheel = true;
-              };
-              benchmarks = prev.benchmarks.override {
-                preferWheel = true;
-              };
-              ragas = prev.ragas.override {
+              tokenizers = prev.tokenizers.override {
                 preferWheel = true;
               };
               pysbd = prev.pysbd.overridePythonAttrs(old: rec {
@@ -55,6 +66,18 @@
                     ${old.postInstall or ""}
                 '';
               });
+              torch = prev.torch.overrideAttrs(old: {
+                cudaSupport = true;
+                cudatoolkit = pkgs.cudaPackages.cudatoolkit;
+                preferWheel = false;
+                  nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.cudaPackages.cudnn ];
+              });
+              pytorch = prev.pytorch.overrideAttrs(old: {
+                cudaSupport = true;
+                cudatoolkit = pkgs.cudaPackages.cudatoolkit;
+                preferWheel = false;
+                  nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.cudaPackages.cudnn ];
+              });
             }
           );
         };
@@ -62,32 +85,34 @@
       in
       {
       devShells.default = pkgs.mkShell {
+          # nativeBuildInputs is for tools that are used in the moment of installation.
+          nativeBuildInputs = [
+            pkgs.cudaPackages.cudatoolkit
+            pkgs.cudaPackages.cudnn
+          ];
           buildInputs = [
             # For all other python dependencies.
             env
-
-            # For my sanity
+            pkgs.cudaPackages.cudatoolkit
             pkgs.zsh
-
             pkgs.git
-            pkgs.nodejs
-
-            # For Reading Toml Files
-            pkgs.yq
-
-            # For all gcloud related things
-            pkgs.google-cloud-sdk
+            pkgs.stdenv.cc.cc
 
           ];
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
+          CUDA_PATH = pkgs.cudaPackages.cudatoolkit;
 
+          # NIX_LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc pkgs.glibc pkgs.gcc.cc ];
+          # NIX_LD = builtins.readFile "${pkgs.stdenv.cc}/nix-support/dynamic-linker";
           shellHook = ''
-            export SHELL=${pkgs.zsh}/bin/zsh
+            # export SHELL=${pkgs.zsh}/bin/zsh
             export INFLAKE="RUN"
+            export CUDA_HOME=${pkgs.cudaPackages.cudatoolkit};
+            export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit};
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib:/usr/lib64:/usr/local/cuda/lib64:/run/opengl-driver/lib:/run/opengl-driver-32/lib;
             echo "Welcome to the ITL Benchmarking Environment."
-            source ./scripts/initialize_scripts.sh
-            echo -e "\033[0;32mYou have been logged in as $ACCOUNT_NAME\033[0m"
-             export RPROMPT="%F{cyan}(󱄅dev)%f"
-            exec zsh
+            #  export RPROMPT="%F{cyan}(󱄅dev)%f"
+            # exec zsh
           '';
       };
 
@@ -99,8 +124,9 @@
         devShells.poetry = pkgs.mkShell {
           packages = [ pkgs.poetry ];
           shellHook = ''
-             export RPROMPT="%F{cyan}(󱄅Poetry)%f"
-             exec zsh
+            export NIX_LD = 
+            export RPROMPT="%F{cyan}( Poetry)%f"
+            exec zsh
           '';
         };
       });

@@ -9,11 +9,16 @@ package-mode= false
 [tool.poetry.dependencies]
 python = "^3.10"
 matplotlib = "^3.9.2"
-torch = "^2.4.1"
 tqdm = "^4.66.5"
 transformers = "^4.44.2"
 pandas = "^2.2.3"
+torch = {version = "^2.4.1+cu121", source = "pytorch_gpu"}
 
+
+[[tool.poetry.source]]
+name = "pytorch_gpu"
+url = "https://download.pytorch.org/whl/cu121"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]
