@@ -84,20 +84,62 @@
 
       in
       {
-      devShells.default = pkgs.mkShell {
+
+      # Thisis the only thing that can make my environment run.
+      devShells.default = (pkgs.buildFHSUserEnv {
+        name = "cuda-env";
+        targetPkgs = pkgs: with pkgs; [ 
+          git
+          gitRepo
+          gnupg
+          autoconf
+          curl
+          procps
+          gnumake
+          util-linux
+          m4
+          gperf
+          unzip
+          cudatoolkit
+          linuxPackages.nvidia_x11
+          libGLU libGL
+          xorg.libXi xorg.libXmu freeglut
+          xorg.libXext xorg.libX11 xorg.libXv xorg.libXrandr zlib 
+          ncurses5
+          stdenv.cc
+          binutils
+          python310
+          poetry
+        ];
+        multiPkgs = pkgs: with pkgs; [ zlib ];
+        runScript = "zsh";
+        profile = ''
+          export CUDA_PATH=${pkgs.cudatoolkit}
+          # export LD_LIBRARY_PATH=${pkgs.linuxPackages.nvidia_x11}/lib
+          export EXTRA_LDFLAGS="-L/lib -L${pkgs.linuxPackages.nvidia_x11}/lib"
+          export EXTRA_CCFLAGS="-I/usr/include"
+          # Tell poetry to use the right python
+          export POETRY_PYTHON_PATH=${pkgs.python310}/bin/python
+          mount --bind ${toString (pkgs.lib.getEnv "HOME")}/.config/nvim $HOME/.config/nvim
+          poetry env use ${pkgs.python310}/bin/python
+          '';
+        }).env;
+
+      # I give up with this one. What a PITA
+      devShells.fwee = pkgs.mkShell {
           # nativeBuildInputs is for tools that are used in the moment of installation.
-          nativeBuildInputs = [
-            pkgs.cudaPackages.cudatoolkit
-            pkgs.cudaPackages.cudnn
-          ];
-          buildInputs = [
+          buildInputs = with pkgs; [
             # For all other python dependencies.
             env
-            pkgs.cudaPackages.cudatoolkit
-            pkgs.zsh
-            pkgs.git
-            pkgs.stdenv.cc.cc
+            # Cuda Stuff
+            cudatoolkit linuxPackages.nvidia_x11
+            libGLU libGL freeglut
+            cudaPackages.cudnn
 
+            zsh
+            git
+            stdenv.cc
+            binutils
           ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath libs;
           CUDA_PATH = pkgs.cudaPackages.cudatoolkit;
@@ -107,9 +149,10 @@
           shellHook = ''
             # export SHELL=${pkgs.zsh}/bin/zsh
             export INFLAKE="RUN"
-            export CUDA_HOME=${pkgs.cudaPackages.cudatoolkit};
-            export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit};
-            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib:/usr/lib64:/usr/local/cuda/lib64:/run/opengl-driver/lib:/run/opengl-driver-32/lib;
+            export CUDA_PATH=${pkgs.cudatoolkit};
+            export EXTRA_LDFLAGS="-L${pkgs.linuxPackages.nvidia_x11}/lib"
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib:/usr/lib64:/usr/local/cuda/lib64:/run/opengl-driver/lib:/run/opengl-driver-32/lib:${pkgs.cudaPackages.cudatoolkit}/lib;
+            export CUDNN=${pkgs.cudaPackages.cudnn}
             echo "Welcome to the ITL Benchmarking Environment."
             #  export RPROMPT="%F{cyan}(󱄅dev)%f"
             # exec zsh
