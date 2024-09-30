@@ -1,6 +1,6 @@
 
 
-def set_seed(seed):
+def set_seeds(seed):
     import torch
     import numpy as np
 
