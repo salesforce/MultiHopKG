@@ -11,6 +11,11 @@ import collections
 import numpy as np
 import os
 import pickle
+from transformers import PreTrainedTokenizer
+import pandas as pd
+import json
+from datetime import datetime
+
 
 START_RELATION = 'START_RELATION'
 NO_OP_RELATION = 'NO_OP_RELATION'
@@ -24,15 +29,6 @@ NO_OP_RELATION_ID = 2
 DUMMY_ENTITY_ID = 0
 NO_OP_ENTITY_ID = 1
 
-
-def load_qa_p_path_dataset(ds_path: str):
-    """
-    Load Questiion-Answer Plus Path Dataset
-    """
-
-    # TODO:
-
-    return  [qa, path]
 
 def check_answer_ratio(examples):
     entity_dict = {}
@@ -446,3 +442,72 @@ def load_configs(args, config_path):
             else:
                 raise ValueError('Unrecognized argument: {}'.format(arg_name))
     return args
+
+def process_qa_data(
+    raw_QAPathData_path: str,
+    cached_QAPathData_path: str,
+    text_tokenizer: PreTrainedTokenizer,
+) :
+    """
+    Args:
+        raw_triples_loc (str) : Place where the unprocessed triples are
+        triples_cache_loc (str) : Place where processed triples are
+        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the tripleshttps://www.youtube.com/watch?v=f-sRcVkZ9yg
+        text_tokenizer (AutoTokenizer) : The tokenizer for the text
+    Returns:
+
+    Data Assumptions:
+        - csv file consists of 1..N columns.
+          N-1 is Question, N is Answer 
+        - 1..N-2 represent the path
+          These columns are organized as Entity, Relation, Entity,...
+    LG: We might change this assumption to a whole graph later on:
+    """
+
+    ## TODO: CACHE Checking
+    # if (
+    #     os.path.exists(triples_cache_loc)
+    #     and os.path.isfile(triples_cache_loc)
+    #     and triples_cache_loc[-4] == ".csv"
+    # ):
+    #     # Then we simply load it and then exit
+    #     metadata = json.load(open(triples_cache_loc.replace(".csv", ".json")))
+    #     return pd.read_csv(triples_cache_loc), metadata
+    
+   
+    ## NOTE:  ---
+    ## Old Data Loading has been moved elsewhere
+    ## ----------
+    ## Processing
+    csv_df = pd.read_csv(raw_QAPathData_path)
+    assert len(csv_df.columns) > 5, "The CSV file should have at least 5 columns. One triplet and one QA pair"
+    question_col_idx = len(csv_df.columns) - 2
+
+    ## Prepare specific triplets/path
+    paths = csv_df.iloc[:, :question_col_idx]
+    qna = csv_df.iloc[:, question_col_idx:]  # Both Q and A
+    num_path_cols = len(paths.columns)
+
+    ## Prepare the language data
+    qna = qna.map(lambda x: str(text_tokenizer.encode(x, add_special_tokens=False)))
+
+    ## Prepare metadata for export
+    # Tokenize the text by applying a pandas map function
+    # Store the metadata
+    metadata = {
+        "tokenizer": text_tokenizer.name_or_path,
+        "num_columns": question_col_idx + 1,
+        "question_column": question_col_idx,
+        "0-index_column": True,
+        "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    new_df = pd.concat([paths, qna], axis=1)
+
+    # Hyper Parametsrs name_{value}
+    specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
+    new_df.to_csv(specific_name, index=False)
+    with open(cached_QAPathData_path.replace(".csv", ".json"), "w") as f:
+        json.dump(metadata, f)
+
+    return new_df, metadata
