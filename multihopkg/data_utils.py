@@ -70,20 +70,20 @@ def change_to_test_model_path(dataset, model_path):
     new_model_path = os.path.join(model_dir, new_model_subdir, file_name)
     return new_model_path
 
-def get_train_path(args):
-    if 'NELL' in args.data_dir:
-        if not args.model.startswith('point'):
-            if args.test:
-                train_path = os.path.join(args.data_dir, 'train.dev.large.triples')
+def get_train_path(data_dir: str, test: bool, model: str):
+    if 'NELL' in data_dir:
+        if not model.startswith('point'):
+            if test:
+                train_path = os.path.join(data_dir, 'train.dev.large.triples')
             else:
-                train_path = os.path.join(args.data_dir, 'train.large.triples')
+                train_path = os.path.join(data_dir, 'train.large.triples')
         else:
-            if args.test:
-                train_path = os.path.join(args.data_dir, 'train.dev.triples')
+            if test:
+                train_path = os.path.join(data_dir, 'train.dev.triples')
             else:
-                train_path = os.path.join(args.data_dir, 'train.triples')
+                train_path = os.path.join(data_dir, 'train.triples')
     else:
-        train_path = os.path.join(args.data_dir, 'train.triples')
+        train_path = os.path.join(data_dir, 'train.triples')
 
     return train_path
 
