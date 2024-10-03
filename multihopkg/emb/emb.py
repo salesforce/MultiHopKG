@@ -16,6 +16,7 @@ import torch.nn as nn
 from src.learn_framework import LFramework
 from src.data_utils import NO_OP_ENTITY_ID, DUMMY_ENTITY_ID
 from src.utils.ops import var_cuda, int_var_cuda, int_fill_var_cuda
+import pdb
 
 
 class EmbeddingBasedMethod(LFramework):
@@ -45,6 +46,7 @@ class EmbeddingBasedMethod(LFramework):
     def loss(self, mini_batch):
         kg, mdl = self.kg, self.mdl
         # compute object training loss
+        pdb.set_trace()
         e1, e2, r = self.format_batch(mini_batch, num_labels=kg.num_entities)
         e2_label = ((1 - self.label_smoothing_epsilon) * e2) + (1.0 / e2.size(1))
         pred_scores = mdl.forward(e1, r, kg)

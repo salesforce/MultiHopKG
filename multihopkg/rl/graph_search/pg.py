@@ -128,6 +128,7 @@ class PolicyGradient(LFramework):
         path_components = []
 
         path_trace = [(r_s, e_s)]
+        # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
         pn.initialize_path((r_s, e_s), kg)
 
         for t in range(num_steps):
