@@ -18,40 +18,62 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
+from transformers.models.idefics.processing_idefics import incremental_to_binary_attention_mask
 
 import multihopkg.eval
+from multihopkg.knowledge_graph import KnowledgeGraph
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
 import multihopkg.utils.ops as ops
 
 
 class LFramework(nn.Module):
-    def __init__(self, args, kg, mdl):
+    def __init__(
+        self,
+        model_dir: str,
+        model: str,
+        data_dir: str,
+        batch_size: int,
+        train_batch_size: int,
+        dev_batch_size: int,
+        start_epoch: int,
+        num_epochs: int,
+        num_wait_epochs: int,
+        num_peek_epochs: int,
+        learning_rate: float,
+        grad_norm: float,
+        adam_beta1: float,
+        adam_beta2: float,
+        train: bool,
+        run_analysis: bool,
+        kg: KnowledgeGraph,
+        mdl, # NOTE: TF is this ?
+    ):
+
         super(LFramework, self).__init__()
-        self.args = args
-        self.data_dir = args.data_dir
-        self.model_dir = args.model_dir
-        self.model = args.model
+        self.data_dir = data_dir  # Used by Child(ren)
+        self.model_dir = model_dir
+        self.model = model
 
         # Training hyperparameters
-        self.batch_size = args.batch_size
-        self.train_batch_size = args.train_batch_size
-        self.dev_batch_size = args.dev_batch_size
-        self.start_epoch = args.start_epoch
-        self.num_epochs = args.num_epochs
-        self.num_wait_epochs = args.num_wait_epochs
-        self.num_peek_epochs = args.num_peek_epochs
-        self.learning_rate = args.learning_rate
-        self.grad_norm = args.grad_norm
-        self.adam_beta1 = args.adam_beta1
-        self.adam_beta2 = args.adam_beta2
+        self.batch_size = batch_size
+        self.train_batch_size = train_batch_size
+        self.dev_batch_size = dev_batch_size
+        self.start_epoch = start_epoch
+        self.num_epochs = num_epochs
+        self.num_wait_epochs = num_wait_epochs
+        self.num_peek_epochs = num_peek_epochs
+        self.learning_rate = learning_rate
+        self.grad_norm = grad_norm
+        self.adam_beta1 = adam_beta1
+        self.adam_beta2 = adam_beta2
         self.optim = None
 
-        self.inference = not args.train
-        self.run_analysis = args.run_analysis
+        self.inference = not train
+        self.run_analysis = run_analysis
 
         self.kg = kg
         self.mdl = mdl
-        print('{} module created'.format(self.model))
+        print("{} module created".format(self.model))
 
     def print_all_model_parameters(self):
         print('\nModel Parameters')

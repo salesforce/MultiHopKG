@@ -16,26 +16,38 @@ from multihopkg.utils.ops import var_cuda, zeros_var_cuda
 
 
 class GraphSearchPolicy(nn.Module):
-    def __init__(self, args):
+    def __init__(
+        self,
+        relation_only: bool,
+        history_dim: int,
+        history_num_layers: int,
+        entity_dim: int,
+        relation_dim: int,
+        ff_dropout_rate: float,
+        xavier_initialization: bool,
+        relation_only_in_path: bool,
+    ):
         super(GraphSearchPolicy, self).__init__()
-        self.model = args.model
-        self.relation_only = args.relation_only
+        # WARN: I am erasing self.model because I cannot see it being used anywhere here
+        # self.model = model
+        self.relation_only = relation_only
 
-        self.history_dim = args.history_dim
-        self.history_num_layers = args.history_num_layers
-        self.entity_dim = args.entity_dim
-        self.relation_dim = args.relation_dim
+        self.history_dim = history_dim
+        self.history_num_layers = history_num_layers
+        self.entity_dim = entity_dim
+        self.relation_dim = relation_dim
         if self.relation_only:
-            self.action_dim = args.relation_dim
+            self.action_dim = relation_dim
         else:
-            self.action_dim = args.entity_dim + args.relation_dim
-        self.ff_dropout_rate = args.ff_dropout_rate
-        self.rnn_dropout_rate = args.rnn_dropout_rate
-        self.action_dropout_rate = args.action_dropout_rate
+            self.action_dim = entity_dim + relation_dim
+        self.ff_dropout_rate = ff_dropout_rate
+        # WARN: Same here. NOt seemingy used anywheres
+        # self.rnn_dropout_rate = rnn_dropout_rate
+        # self.action_dropout_rate = action_dropout_rate
 
-        self.xavier_initialization = args.xavier_initialization
+        self.xavier_initialization = xavier_initialization
 
-        self.relation_only_in_path = args.relation_only_in_path
+        self.relation_only_in_path = relation_only_in_path
         self.path = None
 
         # Set policy network modules

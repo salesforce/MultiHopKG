@@ -10,31 +10,87 @@
 from typing import List
 import torch
 
+from multihopkg.knowledge_graph import KnowledgeGraph
 from multihopkg.learn_framework import LFramework
 import multihopkg.rl.graph_search.beam_search as search
+from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 from transformers import BertTokenizer, BertModel
 
 
 class PolicyGradient(LFramework):
-    def __init__(self, args, kg, pn):
-        super(PolicyGradient, self).__init__(args, kg, pn)
+    def __init__(
+        self,
+        use_action_space_bucketing: bool,
+        num_rollouts: int,
+        baseline: str,
+        beta: float,
+        gamma: float,
+        action_dropout_rate: float,
+        action_dropout_anneal_factor: float,
+        action_dropout_anneal_interval: float,
+        beam_size: int,
+        kg: KnowledgeGraph,
+        pn: GraphSearchPolicy,
+        # Goodness this is ugly:
+        num_rollout_steps: int,
+        model_dir: str,
+        model: str,
+        data_dir: str,
+        batch_size: int,
+        train_batch_size: int,
+        dev_batch_size: int,
+        start_epoch: int,
+        num_epochs: int,
+        num_wait_epochs: int,
+        num_peek_epochs: int,
+        learning_rate: float,
+        grad_norm: float,
+        adam_beta1: float,
+        adam_beta2: float,
+        train: bool,
+        run_analysis: bool,
+    ):
+
+        super(PolicyGradient, self).__init__(
+            model_dir,
+            model,
+            data_dir,
+            batch_size,
+            train_batch_size,
+            dev_batch_size,
+            start_epoch,
+            num_epochs,
+            num_wait_epochs,
+            num_peek_epochs,
+            learning_rate,
+            grad_norm,
+            adam_beta1,
+            adam_beta2,
+            train,
+            run_analysis,
+            kg,
+            pn,
+        )
 
         # Training hyperparameters
-        self.relation_only = args.relation_only
-        self.use_action_space_bucketing = args.use_action_space_bucketing
-        self.num_rollouts = args.num_rollouts
-        self.num_rollout_steps = args.num_rollout_steps
-        self.baseline = args.baseline
-        self.beta = args.beta  # entropy regularization parameter
-        self.gamma = args.gamma  # shrinking factor
-        self.action_dropout_rate = args.action_dropout_rate
-        self.action_dropout_anneal_factor = args.action_dropout_anneal_factor
-        self.action_dropout_anneal_interval = args.action_dropout_anneal_interval
+        self.use_action_space_bucketing = use_action_space_bucketing
+        self.num_rollouts = num_rollouts
+        self.num_rollout_steps = num_rollout_steps
+        self.baseline = baseline
+        self.beta = beta  # entropy regularization parameter
+        self.gamma = gamma  # shrinking factor
+        self.action_dropout_rate = action_dropout_rate
+        self.action_dropout_anneal_factor = (
+            action_dropout_anneal_factor  # Used in parent
+        )
+        self.action_dropout_anneal_interval = (
+            action_dropout_anneal_interval  # Also used by parent
+        )
 
         # Inference hyperparameters
-        self.beam_size = args.beam_size
+        self.beam_size = beam_size
 
         # Analysis
         self.path_types = dict()
