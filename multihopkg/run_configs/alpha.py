@@ -27,4 +27,15 @@ def get_args():
     ap.add_argument("--seed", type=int, default=420, metavar="S")
     ap.add_argument("--tokenizer", type=str, default="bert-base-uncased")
 
+    # NOTE: Legacy Parameters
+    # Might want to get rid of them as we see fit.
+    ap.add_argument("--relation_only", type=str, default="", help="")
+    ap.add_argument("--history_dim", type=str, default="", help="")
+    ap.add_argument("--history_num_layers", type=str, default="", help="")
+    ap.add_argument("--entity_dim", type=str, default="", help="")
+    ap.add_argument("--relation_dim", type=str, default="", help="")
+    ap.add_argument("--ff_dropout_rate", type=str, default="", help="")
+    ap.add_argument("--xavier_initialization", type=str, default="", help="")
+    ap.add_argument("--relation_only_in_path", type=str, default="", help="")
+
     return ap.parse_args()
