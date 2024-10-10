@@ -19,9 +19,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import torch.optim as optim
+from torch import nn
+import logging
 
+from torch.nn.utils import clip_grad_norm_
 # From transformers import general tokenizer
 from transformers import AutoTokenizer, PreTrainedTokenizer
+from tqdm import tqdm
+import argparse
 
 import multihopkg.data_utils as data_utils
 import multihopkg.eval
@@ -38,6 +44,7 @@ from multihopkg.hyperparameter_range import hp_range
 from multihopkg.knowledge_graph import KnowledgeGraph
 
 # LG: This immediately parses things. A script basically.
+from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
 from multihopkg.rl.graph_search.pg import PolicyGradient
 from multihopkg.rl.graph_search.pn import GraphSearchPolicy
@@ -51,9 +58,6 @@ from multihopkg.models.construction import (
     construct_embedding_model,
 )
 from typing import Any, Dict, Tuple
-import pdb
-
-
 
 
 
@@ -86,225 +90,15 @@ def construct_models(args):
     #         raise NotImplementedError
 
 
-def train(lf):
-    train_path = data_utils.get_train_path(args)
-    dev_path = os.path.join(args.data_dir, "dev.triples")
-    entity_index_path = os.path.join(args.data_dir, "entity2id.txt")
-    relation_index_path = os.path.join(args.data_dir, "relation2id.txt")
-    train_data = data_utils.load_triples(
-        train_path,
-        entity_index_path,
-        relation_index_path,
-        group_examples_by_query=args.group_examples_by_query,
-        add_reverse_relations=args.add_reversed_training_edges,
-    )
-    # NELL is a dataset
-    if "NELL" in args.data_dir:
-        adj_list_path = os.path.join(args.data_dir, "adj_list.pkl")
-        seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
-    else:
-        seen_entities = set()
-    dev_data = data_utils.load_triples(
-        dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
-    )
-    if args.checkpoint_path is not None:
-        lf.load_checkpoint(args.checkpoint_path)
-    lf.run_train(train_data, dev_data)
+
+# TODO: re-implement this ?
+# def inference(lf):
+# ... ( you can find it in ./multihopkg/experiments.py )
 
 
-def inference(lf):
-    lf.batch_size = args.dev_batch_size
-    lf.eval()
-    if args.model == "hypere":
-        conve_kg_state_dict = get_conve_kg_state_dict(
-            torch.load(args.conve_state_dict_path)
-        )
-        lf.kg.load_state_dict(conve_kg_state_dict)
-        secondary_kg_state_dict = get_complex_kg_state_dict(
-            torch.load(args.complex_state_dict_path)
-        )
-        lf.secondary_kg.load_state_dict(secondary_kg_state_dict)
-    elif args.model == "triplee":
-        conve_kg_state_dict = get_conve_kg_state_dict(
-            torch.load(args.conve_state_dict_path)
-        )
-        lf.kg.load_state_dict(conve_kg_state_dict)
-        complex_kg_state_dict = get_complex_kg_state_dict(
-            torch.load(args.complex_state_dict_path)
-        )
-        lf.secondary_kg.load_state_dict(complex_kg_state_dict)
-        distmult_kg_state_dict = get_distmult_kg_state_dict(
-            torch.load(args.distmult_state_dict_path)
-        )
-        lf.tertiary_kg.load_state_dict(distmult_kg_state_dict)
-    else:
-        lf.load_checkpoint(get_checkpoint_path(args))
-    entity_index_path = os.path.join(args.data_dir, "entity2id.txt")
-    relation_index_path = os.path.join(args.data_dir, "relation2id.txt")
-    if "NELL" in args.data_dir:
-        adj_list_path = os.path.join(args.data_dir, "adj_list.pkl")
-        seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
-    else:
-        seen_entities = set()
 
-    eval_metrics = {"dev": {}, "test": {}}
-
-    if args.compute_map:
-        relation_sets = [
-            "concept:athletehomestadium",
-            "concept:athleteplaysforteam",
-            "concept:athleteplaysinleague",
-            "concept:athleteplayssport",
-            "concept:organizationheadquarteredincity",
-            "concept:organizationhiredperson",
-            "concept:personborninlocation",
-            "concept:teamplayssport",
-            "concept:worksfor",
-        ]
-        mps = []
-        for r in relation_sets:
-            print("* relation: {}".format(r))
-            test_path = os.path.join(args.data_dir, "tasks", r, "test.pairs")
-            test_data, labels = data_utils.load_triples_with_label(
-                test_path,
-                r,
-                entity_index_path,
-                relation_index_path,
-                seen_entities=seen_entities,
-            )
-            pred_scores = lf.forward(test_data, verbose=False)
-            mp = src.eval.link_MAP(
-                test_data, pred_scores, labels, lf.kg.all_objects, verbose=True
-            )
-            mps.append(mp)
-        map_ = np.mean(mps)
-        print("Overall MAP = {}".format(map_))
-        eval_metrics["test"]["avg_map"] = map
-    elif args.eval_by_relation_type:
-        dev_path = os.path.join(args.data_dir, "dev.triples")
-        dev_data = data_utils.load_triples(
-            dev_path,
-            entity_index_path,
-            relation_index_path,
-            seen_entities=seen_entities,
-        )
-        pred_scores = lf.forward(dev_data, verbose=False)
-        to_m_rels, to_1_rels, _ = data_utils.get_relations_by_type(
-            args.data_dir, relation_index_path
-        )
-        relation_by_types = (to_m_rels, to_1_rels)
-        print("Dev set evaluation by relation type (partial graph)")
-        src.eval.hits_and_ranks_by_relation_type(
-            dev_data, pred_scores, lf.kg.dev_objects, relation_by_types, verbose=True
-        )
-        print("Dev set evaluation by relation type (full graph)")
-        src.eval.hits_and_ranks_by_relation_type(
-            dev_data, pred_scores, lf.kg.all_objects, relation_by_types, verbose=True
-        )
-    elif args.eval_by_seen_queries:
-        dev_path = os.path.join(args.data_dir, "dev.triples")
-        dev_data = data_utils.load_triples(
-            dev_path,
-            entity_index_path,
-            relation_index_path,
-            seen_entities=seen_entities,
-        )
-        pred_scores = lf.forward(dev_data, verbose=False)
-        seen_queries = data_utils.get_seen_queries(
-            args.data_dir, entity_index_path, relation_index_path
-        )
-        print("Dev set evaluation by seen queries (partial graph)")
-        src.eval.hits_and_ranks_by_seen_queries(
-            dev_data, pred_scores, lf.kg.dev_objects, seen_queries, verbose=True
-        )
-        print("Dev set evaluation by seen queries (full graph)")
-        src.eval.hits_and_ranks_by_seen_queries(
-            dev_data, pred_scores, lf.kg.all_objects, seen_queries, verbose=True
-        )
-    else:
-        dev_path = os.path.join(args.data_dir, "dev.triples")
-        test_path = os.path.join(args.data_dir, "test.triples")
-        dev_data = data_utils.load_triples(
-            dev_path,
-            entity_index_path,
-            relation_index_path,
-            seen_entities=seen_entities,
-            verbose=False,
-        )
-        test_data = data_utils.load_triples(
-            test_path,
-            entity_index_path,
-            relation_index_path,
-            seen_entities=seen_entities,
-            verbose=False,
-        )
-        print("Dev set performance:")
-        pred_scores = lf.forward(dev_data, verbose=args.save_beam_search_paths)
-        dev_metrics = src.eval.hits_and_ranks(
-            dev_data, pred_scores, lf.kg.dev_objects, verbose=True
-        )
-        eval_metrics["dev"] = {}
-        eval_metrics["dev"]["hits_at_1"] = dev_metrics[0]
-        eval_metrics["dev"]["hits_at_3"] = dev_metrics[1]
-        eval_metrics["dev"]["hits_at_5"] = dev_metrics[2]
-        eval_metrics["dev"]["hits_at_10"] = dev_metrics[3]
-        eval_metrics["dev"]["mrr"] = dev_metrics[4]
-        src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.all_objects, verbose=True)
-        print("Test set performance:")
-        pred_scores = lf.forward(test_data, verbose=False)
-        test_metrics = src.eval.hits_and_ranks(
-            test_data, pred_scores, lf.kg.all_objects, verbose=True
-        )
-        eval_metrics["test"]["hits_at_1"] = test_metrics[0]
-        eval_metrics["test"]["hits_at_3"] = test_metrics[1]
-        eval_metrics["test"]["hits_at_5"] = test_metrics[2]
-        eval_metrics["test"]["hits_at_10"] = test_metrics[3]
-        eval_metrics["test"]["mrr"] = test_metrics[4]
-
-    return eval_metrics
-
-
-def load_configs(config_path):
-    with open(config_path) as f:
-        print("loading configuration file {}".format(config_path))
-        for line in f:
-            if not "=" in line:
-                continue
-            arg_name, arg_value = line.strip().split("=")
-            if arg_value.startswith('"') and arg_value.endswith('"'):
-                arg_value = arg_value[1:-1]
-            if hasattr(args, arg_name):
-                print("{} = {}".format(arg_name, arg_value))
-                arg_value2 = getattr(args, arg_name)
-                if type(arg_value2) is str:
-                    setattr(args, arg_name, arg_value)
-                elif type(arg_value2) is bool:
-                    if arg_value == "True":
-                        setattr(args, arg_name, True)
-                    elif arg_value == "False":
-                        setattr(args, arg_name, False)
-                    else:
-                        raise ValueError(
-                            "Unrecognized boolean value description: {}".format(
-                                arg_value
-                            )
-                        )
-                elif type(arg_value2) is int:
-                    setattr(args, arg_name, int(arg_value))
-                elif type(arg_value2) is float:
-                    setattr(args, arg_name, float(arg_value))
-                else:
-                    raise ValueError(
-                        "Unrecognized attribute type: {}: {}".format(
-                            arg_name, type(arg_value2)
-                        )
-                    )
-            else:
-                raise ValueError("Unrecognized argument: {}".format(arg_name))
-    return args
-
-
-def initial_setup():
+def initial_setup() -> Tuple[argparse.Namespace, PreTrainedTokenizer, logging.Logger]:
+    global logger
     args = alpha.get_args()
     torch.cuda.set_device(args.gpu)
     set_seeds(args.seed)
@@ -313,7 +107,239 @@ def initial_setup():
     # Get Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
+    assert isinstance(args, argparse.Namespace)
+
     return args, tokenizer, logger
+
+
+
+def losses_fn(mini_batch):
+    # TODO:
+    raise NotImplementedError
+    # def stablize_reward(r):
+    #     r_2D = r.view(-1, self.num_rollouts)
+    #     if self.baseline == 'avg_reward':
+    #         stabled_r_2D = r_2D - r_2D.mean(dim=1, keepdim=True)
+    #     elif self.baseline == 'avg_reward_normalized':
+    #         stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (r_2D.std(dim=1, keepdim=True) + ops.EPSILON)
+    #     else:
+    #         raise ValueError('Unrecognized baseline function: {}'.format(self.baseline))
+    #     stabled_r = stabled_r_2D.view(-1)
+    #     return stabled_r
+    #
+    # e1, e2, r = self.format_batch(mini_batch, num_tiles=self.num_rollouts)
+    # output = self.rollout(e1, r, e2, num_steps=self.num_rollout_steps)
+    #
+    # # Compute policy gradient loss
+    # pred_e2 = output['pred_e2']
+    # log_action_probs = output['log_action_probs']
+    # action_entropy = output['action_entropy']
+    #
+    # # Compute discounted reward
+    # final_reward = self.reward_fun(e1, r, e2, pred_e2)
+    # if self.baseline != 'n/a':
+    #     final_reward = stablize_reward(final_reward)
+    # cum_discounted_rewards = [0] * self.num_rollout_steps
+    # cum_discounted_rewards[-1] = final_reward
+    # R = 0
+    # for i in range(self.num_rollout_steps - 1, -1, -1):
+    #     R = self.gamma * R + cum_discounted_rewards[i]
+    #     cum_discounted_rewards[i] = R
+    #
+    # # Compute policy gradient
+    # pg_loss, pt_loss = 0, 0
+    # for i in range(self.num_rollout_steps):
+    #     log_action_prob = log_action_probs[i]
+    #     pg_loss += -cum_discounted_rewards[i] * log_action_prob
+    #     pt_loss += -cum_discounted_rewards[i] * torch.exp(log_action_prob)
+    #
+    # # Entropy regularization
+    # entropy = torch.cat([x.unsqueeze(1) for x in action_entropy], dim=1).mean(dim=1)
+    # pg_loss = (pg_loss - entropy * self.beta).mean()
+    # pt_loss = (pt_loss - entropy * self.beta).mean()
+    #
+    # loss_dict = {}
+    # loss_dict['model_loss'] = pg_loss
+    # loss_dict['print_loss'] = float(pt_loss)
+    # loss_dict['reward'] = final_reward
+    # loss_dict['entropy'] = float(entropy.mean())
+    # if self.run_analysis:
+    #     fn = torch.zeros(final_reward.size())
+    #     for i in range(len(final_reward)):
+    #         if not final_reward[i]:
+    #             if int(pred_e2[i]) in self.kg.all_objects[int(e1[i])][int(r[i])]:
+    #                 fn[i] = 1
+    #     loss_dict['fn'] = fn
+    #
+    # return loss_dict
+
+# TODO: Finish this inner training loop.
+def batch_train(
+    batch_size: int,
+    grad_norm: float,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer, # type: ignore
+    train_data: torch.Tensor,
+) -> Dict[str,Any]:
+
+    # TODO: Decide on the batch metrics.
+    batch_metrics = {
+        "loss": [],
+        "entropy": [],
+    }
+
+    for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+        optimizer.zero_grad()
+        mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
+        if len(mini_batch) < batch_size:
+            continue
+
+        loss = losses_fn(mini_batch)
+        loss['model_loss'].backward()
+        if grad_norm > 0:
+            clip_grad_norm_(model.parameters(), grad_norm)
+
+        optimizer.step()
+
+        batch_metrics["loss"].append(loss['print_loss'])
+        if 'entropy' in loss:
+            batch_metrics["entropy"].append(loss['entropy'])
+
+
+        # TODO: Need to figure out what `run_analysis` is doing and whether we want it
+        # TOREM: If unecessary
+        # if self.run_analysis:
+        #     if rewards is None:
+        #         rewards = loss['reward']
+        #     else:
+        #         rewards = torch.cat([rewards, loss['reward']])
+        #     if fns is None:
+        #         fns = loss['fn']
+        #     else:
+        #         fns = torch.cat([fns, loss['fn']])
+    return batch_metrics
+
+
+def train_multihopkg(
+    batch_size: int,
+    epochs: int,
+    fmodel: nn.Module,
+    grad_norm: float,
+    # knowledge_graph: KnowledgeGraph,
+    learning_rate: float,
+    start_epoch: int,
+):
+
+    # Print Model Parameters + Perhaps some more information
+    print('Model Parameters')
+    print('--------------------------')
+    for name, param in fmodel.named_parameters():
+        print(name, param.numel(), 'requires_grad={}'.format(param.requires_grad))
+
+    # Just use Adam Optimizer by defailt
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, fmodel.parameters()), lr=learning_rate
+    )  # type:ignore
+
+    #TODO: Metrics to track
+    metrics_to_track = {'loss', 'entropy'}
+    for epoch_id in range(start_epoch, epochs):
+        logger.info('Epoch {}'.format(epoch_id))
+
+        # TODO: Perhaps evaluate the epochs?
+
+        # Set in training mode
+        fmodel.train()
+    
+        # TOREM: Perhapas no need for this shuffle.
+        # random.shuffle(train_data)
+        batch_losses = []
+        entropies = []
+
+        # TODO: Understand if this is actually necessary here
+        # if self.run_analysis:
+        #     rewards = None
+        #     fns = None
+
+        ##############################
+        # Batch Iteration Starts Here.
+        ##############################
+        # TODO: update the parameters.
+        batch_metrics = batch_train(
+            batch_size,
+            grad_norm,
+            fmodel,
+            optimizer,
+            train_data,
+        )
+
+        # Check training statistics
+        stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
+        if entropies:
+            stdout_msg += ' entropy = {}'.format(np.mean(entropies))
+        print(stdout_msg)
+        self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
+        if self.run_analysis:
+            print('* Analysis: # path types seen = {}'.format(self.num_path_types))
+            num_hits = float(rewards.sum())
+            hit_ratio = num_hits / len(rewards)
+            print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
+            num_fns = float(fns.sum())
+            fn_ratio = num_fns / len(fns)
+            print('* Analysis: false negative ratio = {}'.format(fn_ratio))
+
+        # Check dev set performance
+        if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
+            self.eval()
+            self.batch_size = self.dev_batch_size
+            dev_scores = self.forward(dev_data, verbose=False)
+            print('Dev set performance: (correct evaluation)')
+            _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
+            metrics = mrr
+            print('Dev set performance: (include test set labels)')
+            src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
+            # Action dropout anneaking
+            if self.model.startswith('point'):
+                eta = self.action_dropout_anneal_interval
+                if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
+                    old_action_dropout_rate = self.action_dropout_rate
+                    self.action_dropout_rate *= self.action_dropout_anneal_factor 
+                    print('Decreasing action dropout rate: {} -> {}'.format(
+                        old_action_dropout_rate, self.action_dropout_rate))
+            # Save checkpoint
+            if metrics > best_dev_metrics:
+                self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
+                best_dev_metrics = metrics
+                with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
+                    o_f.write('{}'.format(epoch_id))
+            else:
+                # Early stopping
+                if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
+                    break
+            dev_metrics_history.append(metrics)
+            if self.run_analysis:
+                num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
+                dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
+                hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
+                fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
+                if epoch_id == 0:
+                    with open(num_path_types_file, 'w') as o_f:
+                        o_f.write('{}\n'.format(self.num_path_types))
+                    with open(dev_metrics_file, 'w') as o_f:
+                        o_f.write('{}\n'.format(metrics))
+                    with open(hit_ratio_file, 'w') as o_f:
+                        o_f.write('{}\n'.format(hit_ratio))
+                    with open(fn_ratio_file, 'w') as o_f:
+                        o_f.write('{}\n'.format(fn_ratio))
+                else:
+                    with open(num_path_types_file, 'a') as o_f:
+                        o_f.write('{}\n'.format(self.num_path_types))
+                    with open(dev_metrics_file, 'a') as o_f:
+                        o_f.write('{}\n'.format(metrics))
+                    with open(hit_ratio_file, 'a') as o_f:
+                        o_f.write('{}\n'.format(hit_ratio))
+                    with open(fn_ratio_file, 'a') as o_f:
+                        o_f.write('{}\n'.format(fn_ratio))
 
 
 def main():
@@ -321,28 +347,113 @@ def main():
     # Process data will determine by itself if there is any data to process
     args, tokenizer, logger = initial_setup()
 
-    logger.info("Loading data") 
-    process_data(args.QAtriplets_raw_dir, args.QAtriplets_cache_dir, tokenizer)
-
-    # TODO: Maybe re-enable this logic later
-    # with torch.set_grad_enabled(args.train or args.search_random_seed or args.grid_search):
-    logger.info("Setting up seeds, logger, tokenizer")
-    args, tokenizer, logger = initial_setup()
-
     # TODO: Muybe ? (They use it themselves)
     # initialize_model_directory(args, args.seed)
 
     # Setting up the models
-    logger.info(":: (0/3) Setting up models..")
-    embedding_model = construct_embedding_model(args)
     logger.info(":: (1/3) Loaded embedding model")
-    env = construct_env_model(args)
+    env = GraphSearchPolicy(
+        relation_only=args.relation_only,
+        history_dim=args.history_dim,
+        history_num_layers=args.history_num_layers,
+        entity_dim=args.entity_dim,
+        relation_dim=args.relation_dim,
+        ff_dropout_rate=args.ff_dropout_rate,
+        xavier_initialization=args.xavier_initialization,
+        relation_only_in_path=args.relation_only_in_path,
+    )
     logger.info(":: (2/3) Loaded environment module")
-    nav_agent = construct_navagent(args)  # Boi to be trained
-    logger.info(":: (3/3) Loaded navigation agent")
 
+    ## Agent needs a Knowledge graph as well as the environment
+    knowledge_graph = KnowledgeGraph(
+        bandwidth = args.bandwidth,
+        data_dir = args.data_dir,
+        model = args.model,
+        entity_dim = args.entity_dim,
+        relation_dim = args.relation_dim,
+        emb_dropout_rate = args.emb_dropout_rate,
+        num_graph_convolution_layers = args.num_graph_convolution_layers,
+        use_action_space_bucketing = args.use_action_space_bucketing,
+        bucket_interval = args.bucket_interval,
+        test = args.test,
+        relation_only = args.relation_only,
+    )
+
+    nav_agent = PolicyGradient(
+        args.use_action_space_bucketing,
+        args.num_rollouts,
+        args.baseline,
+        args.beta,
+        args.gamma,
+        args.action_dropout_rate,
+        args.action_dropout_anneal_factor,
+        args.action_dropout_anneal_interval,
+        args.beam_size,
+        knowledge_graph,
+        env, # What you just created above
+        args.num_rollout_steps,
+        args.model_dir,
+        args.model,
+        args.data_dir,
+        args.batch_size,
+        args.train_batch_size,
+        args.dev_batch_size,
+        args.start_epoch,
+        args.num_epochs,
+        args.num_wait_epochs,
+        args.num_peek_epochs,
+        args.learning_rate,
+        args.grad_norm,
+        args.adam_beta1,
+        args.adam_beta2,
+        args.train,
+        args.run_analysis,
+    )
+
+    logger.info(":: (3/3) Loaded navigation agent")
     logger.info(":: Training the model")
-    train(nav_agent)
+
+
+    ######## ######## ########
+    # Train:
+    ######## ######## ########
+    entity_index_path = os.path.join(args.data_dir, "entity2id.txt")
+    relation_index_path = os.path.join(args.data_dir, "relation2id.txt")
+
+    text_tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+
+    train_data = data_utils.process_qa_data(
+        args.raw_QAPathData_path,
+        args.cached_QAPathData_path,
+        text_tokenizer,
+    )
+
+    # TODO: Load the validation data
+    # dev_path = os.path.join(args.data_dir, "dev.triples")
+    # dev_data = data_utils.load_triples(
+    #     dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
+    # )
+
+    # TODO: Make it take check for a checkpoint and decide what start_epoch
+    # start_epoch = 0
+
+    dev_data = None
+
+    if args.checkpoint_path is not None:
+        # TODO: Add it here to load the checkpoint separetely
+        lf.load_checkpoint(args.checkpoint_path)
+
+    train_multihopkg(
+        args.batch_size,
+        args.epochs,
+        nav_agent,
+        args.grad_norm,
+        # knowledge_graph,
+        args.learning_rate,
+        args.start_epoch,
+    )
+    # lf.run_train(train_data, dev_data)
+
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)
