@@ -43,7 +43,7 @@ class LFramework(nn.Module):
         grad_norm: float,
         adam_beta1: float,
         adam_beta2: float,
-        train: bool,
+        # train: bool,
         run_analysis: bool,
         kg: KnowledgeGraph,
         mdl, # NOTE: TF is this ?
@@ -68,7 +68,7 @@ class LFramework(nn.Module):
         self.adam_beta2 = adam_beta2
         self.optim = None
 
-        self.inference = not train
+        # self.inference = not train
         self.run_analysis = run_analysis
 
         self.kg = kg
@@ -296,23 +296,23 @@ class LFramework(nn.Module):
             torch.save(checkpoint_dict, out_tar)
             print('=> saving checkpoint to \'{}\''.format(out_tar))
 
-    def load_checkpoint(self, input_file):
-        """
-        Load model checkpoint.
-        :param n: Neural network module.
-        :param kg: Knowledge graph module.
-        :param input_file: Checkpoint file path.
-        """
-        if os.path.isfile(input_file):
-            print('=> loading checkpoint \'{}\''.format(input_file))
-            checkpoint = torch.load(input_file, map_location="cuda:{}".format(self.args.gpu))
-            self.load_state_dict(checkpoint['state_dict'])
-            if not self.inference:
-                self.start_epoch = checkpoint['epoch_id'] + 1
-                assert (self.start_epoch <= self.num_epochs)
-        else:
-            print('=> no checkpoint found at \'{}\''.format(input_file))
-
+    # def load_checkpoint(self, input_file):
+    #     """
+    #     Load model checkpoint.
+    #     :param n: Neural network module.
+    #     :param kg: Knowledge graph module.
+    #     :param input_file: Checkpoint file path.
+    #     """
+    #     if os.path.isfile(input_file):
+    #         print('=> loading checkpoint \'{}\''.format(input_file))
+    #         checkpoint = torch.load(input_file, map_location="cuda:{}".format(self.args.gpu))
+    #         self.load_state_dict(checkpoint['state_dict'])
+    #         if not self.inference:
+    #             self.start_epoch = checkpoint['epoch_id'] + 1
+    #             assert (self.start_epoch <= self.num_epochs)
+    #     else:
+    #         print('=> no checkpoint found at \'{}\''.format(input_file))
+    
     def export_to_embedding_projector(self):
         """
         Export knowledge base embeddings into .tsv files accepted by the Tensorflow Embedding Projector.
