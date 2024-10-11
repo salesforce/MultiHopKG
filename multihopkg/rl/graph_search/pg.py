@@ -97,6 +97,7 @@ class PolicyGradient(LFramework):
         self.num_path_types = 0
 
     def reward_fun(self, e1, r, e2, pred_e2):
+        # TODO: Change to the one Andres should be doing. (The soft reward)
         return (pred_e2 == e2).float()
 
     def loss(self, mini_batch):
@@ -177,12 +178,17 @@ class PolicyGradient(LFramework):
         kg, pn = self.kg, self.mdl
 
         # Initialization
+
+        # These are all very reinforcement-learning things
         log_action_probs = []
         action_entropy = []
+
+        # Dummy nodes ? TODO: Figur eout what they do.
         r_s = int_fill_var_cuda(e_s.size(), kg.dummy_start_r)
         seen_nodes = int_fill_var_cuda(e_s.size(), kg.dummy_e).unsqueeze(1)
         path_components = []
 
+        # Save some history
         path_trace = [(r_s, e_s)]
         # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
         pn.initialize_path((r_s, e_s), kg)

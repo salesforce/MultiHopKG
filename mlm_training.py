@@ -50,6 +50,7 @@ from multihopkg.rl.graph_search.pg import PolicyGradient
 from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
+from multihopkg.utils.convenience import not_implemented
 from multihopkg.logging import setup_logger
 from multihopkg.utils.setup import set_seeds
 from multihopkg.models.construction import (
@@ -58,6 +59,7 @@ from multihopkg.models.construction import (
     construct_embedding_model,
 )
 from typing import Any, Dict, Tuple
+from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 
 
 
@@ -342,6 +344,70 @@ def train_multihopkg(
                         o_f.write('{}\n'.format(fn_ratio))
 
 
+def rollout(
+    # TODO: self.mdl should point to (policy network)
+    kg: KnowledgeGraph,
+    num_steps,
+    pn: PolicyGradient,
+    policy_network: GraphSearchPolicy,
+    query: torch.Tensor,
+    visualize_action_probs=False,
+):
+    assert (num_steps > 0)
+
+    # Initialization
+    # TOREM: Figure out how to get the dimension of the relationships and embeddings 
+    entity_shape = not_implemented(torch.tensor, "entity_shape","mlm_training.py::rollout()")
+
+    # These are all very reinforcement-learning things
+    log_action_probs = []
+    action_entropy = []
+
+    # Dummy nodes ? TODO: Figur eout what they do.
+    # TODO: Perhaps here we can enter through the centroid.
+    # For now we still with these dummy
+    r_s = int_fill_var_cuda(entity_shape, kg.dummy_start_r)
+    # NOTE: We repeat these entities until we get the right shape:
+    seen_nodes = int_fill_var_cuda(entity_shape, kg.dummy_e).unsqueeze(1)
+    path_components = []
+
+    # Save some history
+    path_trace = [(r_s, e_s)]
+    # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
+    pn.initialize_path((r_s, e_s), kg)
+
+    for t in range(num_steps):
+        last_r, e = path_trace[-1]
+        obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+
+        db_outcomes, inv_offset, policy_entropy = pn.transit(
+            e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
+
+        sample_outcome = self.sample_action(db_outcomes, inv_offset)
+        action = sample_outcome['action_sample']
+        pn.update_path(action, kg)
+        action_prob = sample_outcome['action_prob']
+        log_action_probs.append(ops.safe_log(action_prob))
+        action_entropy.append(policy_entropy)
+        seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
+        path_trace.append(action)
+
+        if visualize_action_probs:
+            top_k_action = sample_outcome['top_actions']
+            top_k_action_prob = sample_outcome['top_action_probs']
+            path_components.append((e, top_k_action, top_k_action_prob))
+
+    pred_e2 = path_trace[-1][1]
+    self.record_path_trace(path_trace)
+
+    return {
+        'pred_e2': pred_e2,
+        'log_action_probs': log_action_probs,
+        'action_entropy': action_entropy,
+        'path_trace': path_trace,
+        'path_components': path_components
+    }
+
 def main():
     # By default we run the config
     # Process data will determine by itself if there is any data to process
@@ -439,9 +505,10 @@ def main():
 
     dev_data = None
 
-    if args.checkpoint_path is not None:
-        # TODO: Add it here to load the checkpoint separetely
-        lf.load_checkpoint(args.checkpoint_path)
+    # TODO:  Maybe ?
+    # if args.checkpoint_path is not None:
+    #     # TODO: Add it here to load the checkpoint separetely
+    #     nav_agent.load_checkpoint(args.checkpoint_path)
 
     train_multihopkg(
         args.batch_size,
