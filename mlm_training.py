@@ -480,6 +480,9 @@ def main():
     logger.info(":: Training the model")
 
 
+    # TODO: Add checkpoint support:
+    start_epoch = 0
+
     ######## ######## ########
     # Train:
     ######## ######## ########
@@ -488,11 +491,13 @@ def main():
 
     text_tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
-    train_data = data_utils.process_qa_data(
+    train_data, metadata = data_utils.process_qa_data(
         args.raw_QAPathData_path,
         args.cached_QAPathData_path,
         text_tokenizer,
     )
+    list_train_data = list(train_data.values)
+    
 
     # TODO: Load the validation data
     # dev_path = os.path.join(args.data_dir, "dev.triples")
@@ -500,27 +505,27 @@ def main():
     #     dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
     # )
 
+
     # TODO: Make it take check for a checkpoint and decide what start_epoch
-    # start_epoch = 0
-
-    dev_data = None
-
-    # TODO:  Maybe ?
     # if args.checkpoint_path is not None:
     #     # TODO: Add it here to load the checkpoint separetely
     #     nav_agent.load_checkpoint(args.checkpoint_path)
+    start_epoch = 0
+    dev_data = None
+
 
     train_multihopkg(
         args.batch_size,
         args.epochs,
         nav_agent,
         args.grad_norm,
-        # knowledge_graph,
+        knowledge_graph,
         args.learning_rate,
         args.start_epoch,
+        start_epoch,
+        list_train_data,
     )
     # lf.run_train(train_data, dev_data)
-
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)
