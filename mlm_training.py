@@ -227,9 +227,11 @@ def train_multihopkg(
     epochs: int,
     fmodel: nn.Module,
     grad_norm: float,
-    # knowledge_graph: KnowledgeGraph,
+    kg: KnowledgeGraph,
     learning_rate: float,
+    pn: GraphSearchPolicy,
     start_epoch: int,
+    train_data: List[torch.Tensor],
 ):
 
     # Print Model Parameters + Perhaps some more information
@@ -239,9 +241,9 @@ def train_multihopkg(
         print(name, param.numel(), 'requires_grad={}'.format(param.requires_grad))
 
     # Just use Adam Optimizer by defailt
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.Adam( # type: ignore
         filter(lambda p: p.requires_grad, fmodel.parameters()), lr=learning_rate
-    )  # type:ignore
+    ) 
 
     #TODO: Metrics to track
     metrics_to_track = {'loss', 'entropy'}
@@ -267,83 +269,88 @@ def train_multihopkg(
         # Batch Iteration Starts Here.
         ##############################
         # TODO: update the parameters.
-        batch_metrics = batch_train(
-            batch_size,
-            grad_norm,
-            fmodel,
-            optimizer,
-            train_data,
-        )
+        for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+            mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
+            batch_metrics = batch_loop(
+                mini_batch,
+                grad_norm,
+                kg,
+                fmodel,
+                optimizer,
+                pn
+            )
+        # TODO: Check on the metrics:
 
+        # TODO: (?) This is analysis. We might not need it.
         # Check training statistics
-        stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
-        if entropies:
-            stdout_msg += ' entropy = {}'.format(np.mean(entropies))
-        print(stdout_msg)
-        self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
-        if self.run_analysis:
-            print('* Analysis: # path types seen = {}'.format(self.num_path_types))
-            num_hits = float(rewards.sum())
-            hit_ratio = num_hits / len(rewards)
-            print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
-            num_fns = float(fns.sum())
-            fn_ratio = num_fns / len(fns)
-            print('* Analysis: false negative ratio = {}'.format(fn_ratio))
-
-        # Check dev set performance
-        if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
-            self.eval()
-            self.batch_size = self.dev_batch_size
-            dev_scores = self.forward(dev_data, verbose=False)
-            print('Dev set performance: (correct evaluation)')
-            _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
-            metrics = mrr
-            print('Dev set performance: (include test set labels)')
-            src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
-            # Action dropout anneaking
-            if self.model.startswith('point'):
-                eta = self.action_dropout_anneal_interval
-                if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
-                    old_action_dropout_rate = self.action_dropout_rate
-                    self.action_dropout_rate *= self.action_dropout_anneal_factor 
-                    print('Decreasing action dropout rate: {} -> {}'.format(
-                        old_action_dropout_rate, self.action_dropout_rate))
-            # Save checkpoint
-            if metrics > best_dev_metrics:
-                self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
-                best_dev_metrics = metrics
-                with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
-                    o_f.write('{}'.format(epoch_id))
-            else:
-                # Early stopping
-                if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
-                    break
-            dev_metrics_history.append(metrics)
-            if self.run_analysis:
-                num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
-                dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
-                hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
-                fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
-                if epoch_id == 0:
-                    with open(num_path_types_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(self.num_path_types))
-                    with open(dev_metrics_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(metrics))
-                    with open(hit_ratio_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(hit_ratio))
-                    with open(fn_ratio_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(fn_ratio))
-                else:
-                    with open(num_path_types_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(self.num_path_types))
-                    with open(dev_metrics_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(metrics))
-                    with open(hit_ratio_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(hit_ratio))
-                    with open(fn_ratio_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(fn_ratio))
-
-
+        # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
+        # if entropies:
+        #     stdout_msg += ' entropy = {}'.format(np.mean(entropies))
+        # print(stdout_msg)
+        # self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
+        # if self.run_analysis:
+        #     print('* Analysis: # path types seen = {}'.format(self.num_path_types))
+        #     num_hits = float(rewards.sum())
+        #     hit_ratio = num_hits / len(rewards)
+        #     print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
+        #     num_fns = float(fns.sum())
+        #     fn_ratio = num_fns / len(fns)
+        #     print('* Analysis: false negative ratio = {}'.format(fn_ratio))
+        #
+        # # Check dev set performance
+        # if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
+        #     self.eval()
+        #     self.batch_size = self.dev_batch_size
+        #     dev_scores = self.forward(dev_data, verbose=False)
+        #     print('Dev set performance: (correct evaluation)')
+        #     _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
+        #     metrics = mrr
+        #     print('Dev set performance: (include test set labels)')
+        #     src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
+        #     # Action dropout anneaking
+        #     if self.model.startswith('point'):
+        #         eta = self.action_dropout_anneal_interval
+        #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
+        #             old_action_dropout_rate = self.action_dropout_rate
+        #             self.action_dropout_rate *= self.action_dropout_anneal_factor 
+        #             print('Decreasing action dropout rate: {} -> {}'.format(
+        #                 old_action_dropout_rate, self.action_dropout_rate))
+        #     # Save checkpoint
+        #     if metrics > best_dev_metrics:
+        #         self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
+        #         best_dev_metrics = metrics
+        #         with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
+        #             o_f.write('{}'.format(epoch_id))
+        #     else:
+        #         # Early stopping
+        #         if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
+        #             break
+        #     dev_metrics_history.append(metrics)
+        #     if self.run_analysis:
+        #         num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
+        #         dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
+        #         hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
+        #         fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
+        #         if epoch_id == 0:
+        #             with open(num_path_types_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #         else:
+        #             with open(num_path_types_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #
+        #
 def rollout(
     # TODO: self.mdl should point to (policy network)
     kg: KnowledgeGraph,
