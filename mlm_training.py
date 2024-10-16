@@ -41,13 +41,13 @@ from multihopkg.emb.fact_network import (
     get_distmult_kg_state_dict,
 )
 from multihopkg.hyperparameter_range import hp_range
-from multihopkg.knowledge_graph import KnowledgeGraph
+from multihopkg.knowledge_graph import KnowledgeGraph, ITLKnowledgeGraph
 
 # LG: This immediately parses things. A script basically.
 from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
-from multihopkg.rl.graph_search.pg import PolicyGradient
-from multihopkg.rl.graph_search.pn import GraphSearchPolicy
+from multihopkg.rl.graph_search.pg import ContinuousPolicyGradient, PolicyGradient
+from multihopkg.rl.graph_search.pn import ITLGraphSearchPolicy, GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
 from multihopkg.utils.convenience import not_implemented
@@ -58,7 +58,7 @@ from multihopkg.models.construction import (
     construct_navagent,
     construct_embedding_model,
 )
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 
 
@@ -176,12 +176,21 @@ def losses_fn(mini_batch):
     # return loss_dict
 
 # TODO: Finish this inner training loop.
-def batch_train(
-    batch_size: int,
+# TODO: 1: Assumes you arae happy with batch being passed (meaning you have to check its not too small)
+
+def prep_questions(questions: torch.Tensor, embedder: torch.PreTrainedTokenizer):
+    embedded_questions = embedder(questions)
+    return embedded_questions
+    
+    
+def batch_loop(
+    mini_batch: List[torch.Tensor], # Perhaps change this ?
     grad_norm: float,
-    model: nn.Module,
+    kg: KnowledgeGraph,
+    navigator: nn.Module,
     optimizer: torch.optim.Optimizer, # type: ignore
-    train_data: torch.Tensor,
+    pn: GraphSearchPolicy,
+    num_rollout_steps: int,
 ) -> Dict[str,Any]:
 
     # TODO: Decide on the batch metrics.
@@ -190,45 +199,49 @@ def batch_train(
         "entropy": [],
     }
 
-    for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
-        optimizer.zero_grad()
-        mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
-        if len(mini_batch) < batch_size:
-            continue
+    optimizer.zero_grad()
 
-        loss = losses_fn(mini_batch)
-        loss['model_loss'].backward()
-        if grad_norm > 0:
-            clip_grad_norm_(model.parameters(), grad_norm)
+    # TODO: Prep the questions here
+    questions_embeddings = prep_questions(torch.Tensor(mini_batch))
 
-        optimizer.step()
+    # TODO: Run the simulation here
+    experience = rollout(kg, num_rollout_steps, pn, navigator, questions, False)
 
-        batch_metrics["loss"].append(loss['print_loss'])
-        if 'entropy' in loss:
-            batch_metrics["entropy"].append(loss['entropy'])
+    # TODO: Then we can call the loss in hindsight on the simulation performance.
+    # loss = losses_fn(mini_batch)
+    # loss['model_loss'].backward()
+    # if grad_norm > 0:
+    #     clip_grad_norm_(model.parameters(), grad_norm)
+
+    optimizer.step()
+
+    batch_metrics["loss"].append(loss['print_loss'])
+    if 'entropy' in loss:
+        batch_metrics["entropy"].append(loss['entropy'])
 
 
-        # TODO: Need to figure out what `run_analysis` is doing and whether we want it
-        # TOREM: If unecessary
-        # if self.run_analysis:
-        #     if rewards is None:
-        #         rewards = loss['reward']
-        #     else:
-        #         rewards = torch.cat([rewards, loss['reward']])
-        #     if fns is None:
-        #         fns = loss['fn']
-        #     else:
-        #         fns = torch.cat([fns, loss['fn']])
+    # TODO: Need to figure out what `run_analysis` is doing and whether we want it
+    # TOREM: If unecessary
+    # if self.run_analysis:
+    #     if rewards is None:
+    #         rewards = loss['reward']
+    #     else:
+    #         rewards = torch.cat([rewards, loss['reward']])
+    #     if fns is None:
+    #         fns = loss['fn']
+    #     else:
+    #         fns = torch.cat([fns, loss['fn']])
     return batch_metrics
 
 
 def train_multihopkg(
     batch_size: int,
     epochs: int,
-    fmodel: nn.Module,
+    nav_agent: nn.Module,
     grad_norm: float,
     kg: KnowledgeGraph,
     learning_rate: float,
+    num_rollout_steps: int,
     pn: GraphSearchPolicy,
     start_epoch: int,
     train_data: List[torch.Tensor],
@@ -237,12 +250,12 @@ def train_multihopkg(
     # Print Model Parameters + Perhaps some more information
     print('Model Parameters')
     print('--------------------------')
-    for name, param in fmodel.named_parameters():
+    for name, param in nav_agent.named_parameters():
         print(name, param.numel(), 'requires_grad={}'.format(param.requires_grad))
 
     # Just use Adam Optimizer by defailt
     optimizer = torch.optim.Adam( # type: ignore
-        filter(lambda p: p.requires_grad, fmodel.parameters()), lr=learning_rate
+        filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
     ) 
 
     #TODO: Metrics to track
@@ -253,7 +266,7 @@ def train_multihopkg(
         # TODO: Perhaps evaluate the epochs?
 
         # Set in training mode
-        fmodel.train()
+        nav_agent.train()
     
         # TOREM: Perhapas no need for this shuffle.
         # random.shuffle(train_data)
@@ -275,10 +288,14 @@ def train_multihopkg(
                 mini_batch,
                 grad_norm,
                 kg,
-                fmodel,
+                nav_agent,
                 optimizer,
-                pn
+                pn,
+                num_rollout_steps
             )
+
+            # TODO: Do something with the mini batch
+
         # TODO: Check on the metrics:
 
         # TODO: (?) This is analysis. We might not need it.
@@ -351,15 +368,31 @@ def train_multihopkg(
         #                 o_f.write('{}\n'.format(fn_ratio))
         #
         #
+
+def initialize_path(questions: torch.Tensor):
+    # Questions must be turned into queries
+    
+
 def rollout(
     # TODO: self.mdl should point to (policy network)
     kg: KnowledgeGraph,
     num_steps,
-    pn: PolicyGradient,
-    policy_network: GraphSearchPolicy,
-    query: torch.Tensor,
+    navigator_agent: ContinuousPolicyGradient,
+    graphman: ITLGraphSearchPolicy,
+    questions: torch.Tensor, 
     visualize_action_probs=False,
 ):
+    """
+    Will execute rollouts in parallel.
+    args:
+        kg: Knowledge graph environment.
+        num_steps: Number of rollout steps.
+        navigator_agent: Policy network.
+        graphman: Graph search policy network.
+        questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
+        visualize_action_probs: If set, save action probabilities for visualization.
+    """
+        
     assert (num_steps > 0)
 
     # Initialization
@@ -375,27 +408,38 @@ def rollout(
     # For now we still with these dummy
     r_s = int_fill_var_cuda(entity_shape, kg.dummy_start_r)
     # NOTE: We repeat these entities until we get the right shape:
+    # TODO: make sure we keep all seen nodes up to date
     seen_nodes = int_fill_var_cuda(entity_shape, kg.dummy_e).unsqueeze(1)
     path_components = []
 
     # Save some history
-    path_trace = [(r_s, e_s)]
+    # path_trace = [(r_s, e_s)]
+    path_trace = [(graphman.get_centroid())] # We can just change it to be different places we end up at.
     # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
-    pn.initialize_path((r_s, e_s), kg)
 
+    # TODO: initialize the path. However tha tmay be
+    # Something along these lines is what the initial path should look like for us.
+    initial_path = [(graphman.get_centroid(), questions)]
+    # pn.initialize_path(kg) # TOREM: Unecessasry to ask pn to form it for us.
     for t in range(num_steps):
+        
+        # I Dont think changing this is necessary
         last_r, e = path_trace[-1]
+
+        # TODO: Make obseervations not rely on the question
         obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
 
-        db_outcomes, inv_offset, policy_entropy = pn.transit(
-            e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
-
-        sample_outcome = self.sample_action(db_outcomes, inv_offset)
+        # TODO: (Mega): Oh yeah this is where we are getting all the shapes contorted and such.
+        # Frankly, I think this is unecessary since we dont need to query available action spaces but rather just sample it
+        # db_outcomes, inv_offset, policy_entropy = pn.transit(
+        #     e, obs, kg
+        # )
+        sample_outcome = navigator_agent.sample_action(db_outcomes, inv_offset)
         action = sample_outcome['action_sample']
-        pn.update_path(action, kg)
+        # pn.update_path(action, kg) # TODO: Confirm this is actually needed
         action_prob = sample_outcome['action_prob']
-        log_action_probs.append(ops.safe_log(action_prob))
-        action_entropy.append(policy_entropy)
+        # log_action_probs.append(ops.safe_log(action_prob)) # TODO: Compute this again ( if necessary) 
+        # action_entropy.append(policy_entropy) # TOREM: Comes from `transit` not sure if I shoudl remove it
         seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
         path_trace.append(action)
 
@@ -520,7 +564,6 @@ def main():
     start_epoch = 0
     dev_data = None
 
-
     train_multihopkg(
         args.batch_size,
         args.epochs,
@@ -528,15 +571,15 @@ def main():
         args.grad_norm,
         knowledge_graph,
         args.learning_rate,
+        args.num_rollout_steps,
         args.start_epoch,
         start_epoch,
         list_train_data,
     )
-    # lf.run_train(train_data, dev_data)
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)
 
 
 if __name__ == "__main__":
-    main()
+    main(),

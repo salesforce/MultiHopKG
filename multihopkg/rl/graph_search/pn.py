@@ -14,6 +14,8 @@ import torch.nn.functional as F
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
 
+def calculate_centroid():
+    raise NotImplementedError
 
 class GraphSearchPolicy(nn.Module):
     def __init__(
@@ -60,8 +62,8 @@ class GraphSearchPolicy(nn.Module):
 
     def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         """
-        Compute the next action distribution based on
-            (a) the current node (entity) in KG and the query relation
+        Compute the next action distribution based onsample_action
+            current node (entity) in KG and the query relation
             (b) action history representation
         :param e: agent location (node) at step t.
         :param obs: agent observation at step t.
@@ -406,3 +408,60 @@ class GraphSearchPolicy(nn.Module):
                     nn.init.constant_(param, 0.0)
                 elif 'weight' in name:
                     nn.init.xavier_normal_(param)
+
+class ITLGraphSearchPolicy():
+
+    def __init__(
+        self,
+        relation_only: bool,
+        history_dim: int,
+        history_num_layers: int,
+        entity_dim: int,
+        relation_dim: int,
+        ff_dropout_rate: float,
+        xavier_initialization: bool,
+        relation_only_in_path: bool,
+    ):
+        super(GraphSearchPolicy, self).__init__()
+        # WARN: I am erasing self.model because I cannot see it being used anywhere here
+        # self.model = model
+
+        self.entity_dim = entity_dim
+        self.history_dim = history_dim
+        self.relation_dim = relation_dim
+        self.history_num_layers = history_num_layers
+
+        self.ff_dropout_rate = ff_dropout_rate
+        # WARN: Same here. NOt seemingy used anywheres
+        # self.rnn_dropout_rate = rnn_dropout_rate
+        # self.action_dropout_rate = action_dropout_rate
+        self.xavier_initialization = xavier_initialization
+
+        self.relation_only_in_path = relation_only_in_path
+        self.path = None
+
+        # Calcualte the Centroid
+        self.centroid = calculate_centroid()
+
+        # Set policy network modules
+        self.define_modules()
+        self.initialize_modules()
+
+        # Fact network modules
+        self.fn = None
+        self.fn_kg = None
+    def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
+        raise NotImplementedError 
+
+    def calculate_centroid() -> torch.Tensor:
+        raise NotImplementedError
+
+    def get_centroid():
+        if not self.centroid:
+            self.centroid = self.calculate_centroid()
+        return self.centroid
+
+    def calculate_reward():
+        # Copying purely because they also had somethign calcualting losses for Policy Gradient
+        raise NotImplementedError
+
