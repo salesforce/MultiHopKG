@@ -469,7 +469,7 @@ def main():
 
     # Setting up the models
     logger.info(":: (1/3) Loaded embedding model")
-    env = GraphSearchPolicy(
+    env = ITLGraphEnvironment(
         relation_only=args.relation_only,
         history_dim=args.history_dim,
         history_num_layers=args.history_num_layers,
