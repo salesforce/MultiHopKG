@@ -25,12 +25,11 @@ import logging
 
 from torch.nn.utils import clip_grad_norm_
 # From transformers import general tokenizer
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer, BertModel
 from tqdm import tqdm
 import argparse
 
 import multihopkg.data_utils as data_utils
-import multihopkg.eval
 from multihopkg.emb.emb import EmbeddingBasedMethod
 from multihopkg.emb.fact_network import (
     ComplEx,
@@ -46,20 +45,14 @@ from multihopkg.knowledge_graph import KnowledgeGraph
 # LG: This immediately parses things. A script basically.
 from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
-from multihopkg.rl.graph_search.cpg import ContinuousPolicy
-from multihopkg.rl.graph_search.pg import PolicyGradient
-from multihopkg.rl.graph_search.pn import GraphSearchPolicy
+from multihopkg.rl.graph_search.pg import ContinuousPolicyGradient, PolicyGradient
+from multihopkg.rl.graph_search.pn import ITLGraphEnvironment, GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
-from multihopkg.utils.convenience import not_implemented
+from multihopkg.utils.convenience import create_placeholder
 from multihopkg.logging import setup_logger
 from multihopkg.utils.setup import set_seeds
-from multihopkg.models.construction import (
-    construct_env_model,
-    construct_navagent,
-    construct_embedding_model,
-)
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 
 
@@ -178,12 +171,21 @@ def losses_fn(mini_batch):
     # return loss_dict
 
 # TODO: Finish this inner training loop.
-def batch_train(
-    batch_size: int,
+# TODO: 1: Assumes you arae happy with batch being passed (meaning you have to check its not too small)
+
+def prep_questions(questions: List[torch.Tensor], model: BertModel):
+    embedded_questions = model(questions)
+    return embedded_questions
+    
+    
+def batch_loop(
+    mini_batch: List[torch.Tensor], # Perhaps change this ?
     grad_norm: float,
-    model: nn.Module,
+    kg: KnowledgeGraph,
+    navigator: nn.Module,
     optimizer: torch.optim.Optimizer, # type: ignore
-    train_data: torch.Tensor,
+    pn: GraphSearchPolicy,
+    num_rollout_steps: int,
 ) -> Dict[str,Any]:
 
     # TODO: Decide on the batch metrics.
@@ -192,58 +194,67 @@ def batch_train(
         "entropy": [],
     }
 
-    for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
-        optimizer.zero_grad()
-        mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
-        if len(mini_batch) < batch_size:
-            continue
+    optimizer.zero_grad()
 
-        loss = losses_fn(mini_batch)
-        loss['model_loss'].backward()
-        if grad_norm > 0:
-            clip_grad_norm_(model.parameters(), grad_norm)
+    # TODO: Prep the questions here
+    questions_embeddings = prep_questions(torch.Tensor(mini_batch))
 
-        optimizer.step()
+    # TODO: Run the simulation here
+    experience = rollout(kg, num_rollout_steps, pn, navigator, questions, False)
 
-        batch_metrics["loss"].append(loss['print_loss'])
-        if 'entropy' in loss:
-            batch_metrics["entropy"].append(loss['entropy'])
+    # TODO: Then we can call the loss in hindsight on the simulation performance.
+    # loss = losses_fn(mini_batch)
+    # loss['model_loss'].backward()
+    # if grad_norm > 0:
+    #     clip_grad_norm_(model.parameters(), grad_norm)
+
+    optimizer.step()
+
+    batch_metrics["loss"].append(loss['print_loss'])
+    if 'entropy' in loss:
+        batch_metrics["entropy"].append(loss['entropy'])
 
 
-        # TODO: Need to figure out what `run_analysis` is doing and whether we want it
-        # TOREM: If unecessary
-        # if self.run_analysis:
-        #     if rewards is None:
-        #         rewards = loss['reward']
-        #     else:
-        #         rewards = torch.cat([rewards, loss['reward']])
-        #     if fns is None:
-        #         fns = loss['fn']
-        #     else:
-        #         fns = torch.cat([fns, loss['fn']])
+    # TODO: Need to figure out what `run_analysis` is doing and whether we want it
+    # TOREM: If unecessary
+    # if self.run_analysis:
+    #     if rewards is None:
+    #         rewards = loss['reward']
+    #     else:
+    #         rewards = torch.cat([rewards, loss['reward']])
+    #     if fns is None:
+    #         fns = loss['fn']
+    #     else:
+    #         fns = torch.cat([fns, loss['fn']])
     return batch_metrics
 
 
 def train_multihopkg(
     batch_size: int,
     epochs: int,
-    fmodel: nn.Module,
+    nav_agent: nn.Module,
     grad_norm: float,
-    # knowledge_graph: KnowledgeGraph,
+    kg: KnowledgeGraph,
     learning_rate: float,
+    num_rollout_steps: int,
+    pn: GraphSearchPolicy,
     start_epoch: int,
+    train_data: List[torch.Tensor],
 ):
+
+    print("We got to multihopkg training")
+    exit()
 
     # Print Model Parameters + Perhaps some more information
     print('Model Parameters')
     print('--------------------------')
-    for name, param in fmodel.named_parameters():
+    for name, param in nav_agent.named_parameters():
         print(name, param.numel(), 'requires_grad={}'.format(param.requires_grad))
 
     # Just use Adam Optimizer by defailt
-    optimizer = torch.optim.Adam(
-        filter(lambda p: p.requires_grad, fmodel.parameters()), lr=learning_rate
-    )  # type:ignore
+    optimizer = torch.optim.Adam( # type: ignore
+        filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
+    ) 
 
     #TODO: Metrics to track
     metrics_to_track = {'loss', 'entropy'}
@@ -253,7 +264,7 @@ def train_multihopkg(
         # TODO: Perhaps evaluate the epochs?
 
         # Set in training mode
-        fmodel.train()
+        nav_agent.train()
     
         # TOREM: Perhapas no need for this shuffle.
         # random.shuffle(train_data)
@@ -269,98 +280,123 @@ def train_multihopkg(
         # Batch Iteration Starts Here.
         ##############################
         # TODO: update the parameters.
-        batch_metrics = batch_train(
-            batch_size,
-            grad_norm,
-            fmodel,
-            optimizer,
-            train_data,
-        )
+        for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+            mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
+            batch_metrics = batch_loop(
+                mini_batch,
+                grad_norm,
+                kg,
+                nav_agent,
+                optimizer,
+                pn,
+                num_rollout_steps
+            )
 
+            # TODO: Do something with the mini batch
+
+        # TODO: Check on the metrics:
+
+        # TODO: (?) This is analysis. We might not need it.
         # Check training statistics
-        stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
-        if entropies:
-            stdout_msg += ' entropy = {}'.format(np.mean(entropies))
-        print(stdout_msg)
-        self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
-        if self.run_analysis:
-            print('* Analysis: # path types seen = {}'.format(self.num_path_types))
-            num_hits = float(rewards.sum())
-            hit_ratio = num_hits / len(rewards)
-            print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
-            num_fns = float(fns.sum())
-            fn_ratio = num_fns / len(fns)
-            print('* Analysis: false negative ratio = {}'.format(fn_ratio))
+        # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
+        # if entropies:
+        #     stdout_msg += ' entropy = {}'.format(np.mean(entropies))
+        # print(stdout_msg)
+        # self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
+        # if self.run_analysis:
+        #     print('* Analysis: # path types seen = {}'.format(self.num_path_types))
+        #     num_hits = float(rewards.sum())
+        #     hit_ratio = num_hits / len(rewards)
+        #     print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
+        #     num_fns = float(fns.sum())
+        #     fn_ratio = num_fns / len(fns)
+        #     print('* Analysis: false negative ratio = {}'.format(fn_ratio))
+        #
+        # # Check dev set performance
+        # if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
+        #     self.eval()
+        #     self.batch_size = self.dev_batch_size
+        #     dev_scores = self.forward(dev_data, verbose=False)
+        #     print('Dev set performance: (correct evaluation)')
+        #     _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
+        #     metrics = mrr
+        #     print('Dev set performance: (include test set labels)')
+        #     src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
+        #     # Action dropout anneaking
+        #     if self.model.startswith('point'):
+        #         eta = self.action_dropout_anneal_interval
+        #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
+        #             old_action_dropout_rate = self.action_dropout_rate
+        #             self.action_dropout_rate *= self.action_dropout_anneal_factor 
+        #             print('Decreasing action dropout rate: {} -> {}'.format(
+        #                 old_action_dropout_rate, self.action_dropout_rate))
+        #     # Save checkpoint
+        #     if metrics > best_dev_metrics:
+        #         self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
+        #         best_dev_metrics = metrics
+        #         with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
+        #             o_f.write('{}'.format(epoch_id))
+        #     else:
+        #         # Early stopping
+        #         if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
+        #             break
+        #     dev_metrics_history.append(metrics)
+        #     if self.run_analysis:
+        #         num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
+        #         dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
+        #         hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
+        #         fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
+        #         if epoch_id == 0:
+        #             with open(num_path_types_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #         else:
+        #             with open(num_path_types_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #
+        #
 
-        # Check dev set performance
-        if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
-            self.eval()
-            self.batch_size = self.dev_batch_size
-            dev_scores = self.forward(dev_data, verbose=False)
-            print('Dev set performance: (correct evaluation)')
-            _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
-            metrics = mrr
-            print('Dev set performance: (include test set labels)')
-            src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
-            # Action dropout anneaking
-            if self.model.startswith('point'):
-                eta = self.action_dropout_anneal_interval
-                if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
-                    old_action_dropout_rate = self.action_dropout_rate
-                    self.action_dropout_rate *= self.action_dropout_anneal_factor 
-                    print('Decreasing action dropout rate: {} -> {}'.format(
-                        old_action_dropout_rate, self.action_dropout_rate))
-            # Save checkpoint
-            if metrics > best_dev_metrics:
-                self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
-                best_dev_metrics = metrics
-                with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
-                    o_f.write('{}'.format(epoch_id))
-            else:
-                # Early stopping
-                if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
-                    break
-            dev_metrics_history.append(metrics)
-            if self.run_analysis:
-                num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
-                dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
-                hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
-                fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
-                if epoch_id == 0:
-                    with open(num_path_types_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(self.num_path_types))
-                    with open(dev_metrics_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(metrics))
-                    with open(hit_ratio_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(hit_ratio))
-                    with open(fn_ratio_file, 'w') as o_f:
-                        o_f.write('{}\n'.format(fn_ratio))
-                else:
-                    with open(num_path_types_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(self.num_path_types))
-                    with open(dev_metrics_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(metrics))
-                    with open(hit_ratio_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(hit_ratio))
-                    with open(fn_ratio_file, 'a') as o_f:
-                        o_f.write('{}\n'.format(fn_ratio))
-
+def initialize_path(questions: torch.Tensor):
+    # Questions must be turned into queries
+    raise NotImplementedError
+    
 
 def rollout(
     # TODO: self.mdl should point to (policy network)
     kg: KnowledgeGraph,
     num_steps,
-    pn: PolicyGradient,
-    cpn: ContinuousPolicy, # Continuous Policy Network
-    policy_network: GraphSearchPolicy,
-    query: torch.Tensor,
+    navigator_agent: ContinuousPolicyGradient,
+    graphman: ITLGraphEnvironment,
+    questions: torch.Tensor, 
     visualize_action_probs=False,
 ):
+    """
+    Will execute rollouts in parallel.
+    args:
+        kg: Knowledge graph environment.
+        num_steps: Number of rollout steps.
+        navigator_agent: Policy network.
+        graphman: Graph search policy network.
+        questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
+        visualize_action_probs: If set, save action probabilities for visualization.
+    """
+        
     assert (num_steps > 0)
 
     # Initialization
     # TOREM: Figure out how to get the dimension of the relationships and embeddings 
-    entity_shape = not_implemented(torch.tensor, "entity_shape","mlm_training.py::rollout()")
+    entity_shape = create_placeholder(torch.Tensor, "entity_shape","mlm_training.py::rollout()")
 
     # These are all very reinforcement-learning things
     log_action_probs = []
@@ -371,27 +407,42 @@ def rollout(
     # For now we still with these dummy
     r_s = int_fill_var_cuda(entity_shape, kg.dummy_start_r)
     # NOTE: We repeat these entities until we get the right shape:
+    # TODO: make sure we keep all seen nodes up to date
     seen_nodes = int_fill_var_cuda(entity_shape, kg.dummy_e).unsqueeze(1)
     path_components = []
 
     # Save some history
-    path_trace = [(r_s, e_s)]
+    # path_trace = [(r_s, e_s)]
+    path_trace = [(graphman.get_centroid())] # We can just change it to be different places we end up at.
     # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
-    pn.initialize_path((r_s, e_s), kg)
 
+    # TODO: initialize the path. However tha tmay be
+    # Something along these lines is what the initial path should look like for us.
+    initial_path = [(graphman.get_centroid(), questions)]
+    # pn.initialize_path(kg) # TOREM: Unecessasry to ask pn to form it for us.
     for t in range(num_steps):
+        
+        # I Dont think changing this is necessary
         last_r, e = path_trace[-1]
+
+        # TODO: Make obseervations not rely on the question
         obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
 
-        db_outcomes, inv_offset, policy_entropy = pn.transit(
-            e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
+        # Our observations are composed simply of the places that we end up in. Perhaps the closest embedding that we find using something like ANN
 
-        sample_outcome = self.sample_action(db_outcomes, inv_offset)
+
+        # TODO: (Mega): Oh yeah this is where we are getting all the shapes contorted and such.
+        # Frankly, I think this is unecessary since we dont need to query available action spaces but rather just sample it
+        # db_outcomes, inv_offset, policy_entropy = pn.transit(
+        #     e, obs, kg
+        # )
+
+        sample_outcome = navigator_agent.sample_action(db_outcomes, inv_offset)
         action = sample_outcome['action_sample']
-        pn.update_path(action, kg)
+        # pn.update_path(action, kg) # TODO: Confirm this is actually needed
         action_prob = sample_outcome['action_prob']
-        log_action_probs.append(ops.safe_log(action_prob))
-        action_entropy.append(policy_entropy)
+        # log_action_probs.append(ops.safe_log(action_prob)) # TODO: Compute this again ( if necessary) 
+        # action_entropy.append(policy_entropy) # TOREM: Comes from `transit` not sure if I shoudl remove it
         seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
         path_trace.append(action)
 
@@ -419,20 +470,6 @@ def main():
     # TODO: Muybe ? (They use it themselves)
     # initialize_model_directory(args, args.seed)
 
-    # Setting up the models
-    logger.info(":: (1/3) Loaded embedding model")
-    env = GraphSearchPolicy(
-        relation_only=args.relation_only,
-        history_dim=args.history_dim,
-        history_num_layers=args.history_num_layers,
-        entity_dim=args.entity_dim,
-        relation_dim=args.relation_dim,
-        ff_dropout_rate=args.ff_dropout_rate,
-        xavier_initialization=args.xavier_initialization,
-        relation_only_in_path=args.relation_only_in_path,
-    )
-    logger.info(":: (2/3) Loaded environment module")
-
     ## Agent needs a Knowledge graph as well as the environment
     knowledge_graph = KnowledgeGraph(
         bandwidth = args.bandwidth,
@@ -447,9 +484,23 @@ def main():
         test = args.test,
         relation_only = args.relation_only,
     )
+    # Setting up the models
+    logger.info(":: (1/3) Loaded embedding model")
+    env = ITLGraphEnvironment(
+        entity_dim=args.entity_dim,
+        ff_dropout_rate=args.ff_dropout_rate,
+        history_dim=args.history_dim,
+        history_num_layers=args.history_num_layers,
+        knowledge_graph=knowledge_graph,
+        relation_dim=args.relation_dim,
+        relation_only=args.relation_only,
+        relation_only_in_path=args.relation_only_in_path,
+        xavier_initialization=args.xavier_initialization,
+    )
+    logger.info(":: (2/3) Loaded environment module")
 
-    #TODO: Gotta rewrite nav_agent for ContinuousPolicy
-    nav_agent = PolicyGradient(
+
+    nav_agent = ContinuousPolicyGradient(
         args.use_action_space_bucketing,
         args.num_rollouts,
         args.baseline,
@@ -516,6 +567,9 @@ def main():
     logger.info(":: Training the model")
 
 
+    # TODO: Add checkpoint support:
+    start_epoch = 0
+
     ######## ######## ########
     # Train:
     ######## ######## ########
@@ -524,11 +578,13 @@ def main():
 
     text_tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
-    train_data = data_utils.process_qa_data(
+    train_data, metadata = data_utils.process_qa_data(
         args.raw_QAPathData_path,
         args.cached_QAPathData_path,
         text_tokenizer,
     )
+    list_train_data = list(train_data.values)
+    
 
     # TODO: Load the validation data
     # dev_path = os.path.join(args.data_dir, "dev.triples")
@@ -536,31 +592,30 @@ def main():
     #     dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
     # )
 
+
     # TODO: Make it take check for a checkpoint and decide what start_epoch
-    # start_epoch = 0
-
-    dev_data = None
-
-    # TODO:  Maybe ?
     # if args.checkpoint_path is not None:
     #     # TODO: Add it here to load the checkpoint separetely
     #     nav_agent.load_checkpoint(args.checkpoint_path)
+    start_epoch = 0
+    dev_data = None
 
     train_multihopkg(
         args.batch_size,
         args.epochs,
         nav_agent,
         args.grad_norm,
-        # knowledge_graph,
+        knowledge_graph,
         args.learning_rate,
+        args.num_rollout_steps,
         args.start_epoch,
+        start_epoch,
+        list_train_data,
     )
-    # lf.run_train(train_data, dev_data)
-
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)
 
 
 if __name__ == "__main__":
-    main()
+    main(),

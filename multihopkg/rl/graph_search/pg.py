@@ -17,7 +17,19 @@ from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 from transformers import BertTokenizer, BertModel
+from torch import nn
 
+
+# TOREM: I dont really think we need the Lfraework
+# class ContinuousPolicyGradient(LFramework):
+class ContinuousPolicyGradient(nn.Module):
+    def __init__(self):
+        # TODOHow we train 
+
+        raise NotImplementedError("`ContinuousPolicyGradient` not yet implemented.")
+
+    def sample_action(self, ):
+        raise NotImplementedError
 
 class PolicyGradient(LFramework):
     def __init__(
@@ -170,6 +182,7 @@ class PolicyGradient(LFramework):
         :param kg: Knowledge graph environment.
         :param num_steps: Number of rollout steps.
         :param visualize_action_probs: If set, save action probabilities for visualization.
+
         :return pred_e2: Target entities reached at the end of rollout.
         :return log_path_prob: Log probability of the sampled path.
         :return action_entropy: Entropy regularization term.

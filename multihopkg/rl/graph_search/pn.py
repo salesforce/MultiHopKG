@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
+from typing import Tuple
 
 
 class GraphSearchPolicy(nn.Module):
@@ -60,8 +61,8 @@ class GraphSearchPolicy(nn.Module):
 
     def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         """
-        Compute the next action distribution based on
-            (a) the current node (entity) in KG and the query relation
+        Compute the next action distribution based onsample_action
+            current node (entity) in KG and the query relation
             (b) action history representation
         :param e: agent location (node) at step t.
         :param obs: agent observation at step t.
@@ -382,6 +383,7 @@ class GraphSearchPolicy(nn.Module):
             input_dim = self.history_dim + self.entity_dim * 2 + self.relation_dim
         else:
             input_dim = self.history_dim + self.entity_dim + self.relation_dim
+             
         self.W1 = nn.Linear(input_dim, self.action_dim)
         self.W2 = nn.Linear(self.action_dim, self.action_dim)
         self.W1Dropout = nn.Dropout(p=self.ff_dropout_rate)
@@ -406,3 +408,98 @@ class GraphSearchPolicy(nn.Module):
                     nn.init.constant_(param, 0.0)
                 elif 'weight' in name:
                     nn.init.xavier_normal_(param)
+
+class ITLGraphEnvironment():
+
+    def __init__(
+        self,
+        entity_dim: int,
+        ff_dropout_rate: float,
+        history_dim: int,
+        history_num_layers: int,
+        knowledge_graph: KnowledgeGraph,
+        relation_dim: int,
+        relation_only: bool,
+        relation_only_in_path: bool,
+        xavier_initialization: bool,
+    ):
+        # WARN: I am erasing self.model because I cannot see it being used anywhere here
+        # self.model = model
+
+        self.entity_dim = entity_dim
+        self.history_dim = history_dim # History is STATE
+        # self.relation_dim = relation_dim # For now we dont need it 
+        self.history_encoder_num_layers = history_num_layers  
+
+        self.ff_dropout_rate = ff_dropout_rate
+        # WARN: Same here. Not seemingy used anywheres
+        # self.rnn_dropout_rate = rnn_dropout_rate
+        # self.action_dropout_rate = action_dropout_rate
+        self.xavier_initialization = xavier_initialization
+        self.action_dim = relation_dim # TODO: Ensure this is a solid default
+
+        self.relation_only_in_path = relation_only_in_path
+        self.path = None
+
+        # Calcualte the Centroid
+        self.centroid = calculate_centroid()
+
+        # Define the main modules:
+        self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder = define_path_encoder(
+            self.action_dim,
+            self.ff_dropout_rate,
+            self.history_dim,
+            self.history_encoder_num_layers,
+        )
+
+        # Set policy network modules
+
+        # Fact network modules
+        self.fn = None
+        self.fn_kg = None
+
+    def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
+        # This one will simply find the closes emebdding in our class and dump it here as an observation
+        raise NotImplementedError 
+
+    def get_observation(action): 
+        raise NotImplementedError
+
+    def calculate_centroid() -> torch.Tensor:
+        raise NotImplementedError
+
+    def get_centroid(self) -> torch.Tensor:
+        if not self.centroid:
+            self.centroid = self.calculate_centroid()
+        return self.centroid
+
+    def calculate_reward():
+        # Copying purely because they also had somethign calcualting losses for Policy Gradient
+        raise NotImplementedError
+
+
+def define_path_encoder(
+    action_dim: int,
+    ff_dropout_rate: float,
+    history_dim: int,
+    history_num_layers: int,
+) -> Tuple[nn.Module, nn.Module, nn.Module, nn.Module, nn.Module]:
+    """
+    We will deterine the input_dim outside of this
+
+    """
+
+    input_dim = action_dim
+    W1 = nn.Linear(input_dim, action_dim)
+    W2 = nn.Linear(action_dim, action_dim)
+
+    W1Dropout = nn.Dropout(p=ff_dropout_rate)
+    W2Dropout = nn.Dropout(p=ff_dropout_rate)
+
+    path_encoder = nn.LSTM(
+        input_size=action_dim,
+        hidden_size=history_dim,
+        num_layers=history_num_layers,
+        batch_first=True,
+    )
+    return W1, W2, W1Dropout, W2Dropout, path_encoder

@@ -4,6 +4,7 @@ from typing import Type, TypeVar, Any
 T = TypeVar("T")
 
 
+# TOREM: When we finish the first stage of debugging
 def create_placeholder(expected_type: Type[T], name: str, location: str) -> Any:
     """Creates a placeholder function that raises NotImplementedError.
     Args:
