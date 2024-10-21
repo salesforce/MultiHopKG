@@ -15,8 +15,6 @@ import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
 from typing import Tuple
 
-def calculate_centroid():
-    raise NotImplementedError
 
 class GraphSearchPolicy(nn.Module):
     def __init__(
@@ -415,14 +413,15 @@ class ITLGraphEnvironment():
 
     def __init__(
         self,
-        relation_only: bool,
+        entity_dim: int,
+        ff_dropout_rate: float,
         history_dim: int,
         history_num_layers: int,
-        entity_dim: int,
+        knowledge_graph: KnowledgeGraph,
         relation_dim: int,
-        ff_dropout_rate: float,
-        xavier_initialization: bool,
+        relation_only: bool,
         relation_only_in_path: bool,
+        xavier_initialization: bool,
     ):
         # WARN: I am erasing self.model because I cannot see it being used anywhere here
         # self.model = model

@@ -29,6 +29,7 @@ class ContinuousPolicyGradient(nn.Module):
         raise NotImplementedError("`ContinuousPolicyGradient` not yet implemented.")
 
     def sample_action(self, ):
+        raise NotImplementedError
 
 class PolicyGradient(LFramework):
     def __init__(
