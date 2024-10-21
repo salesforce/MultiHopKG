@@ -25,12 +25,11 @@ import logging
 
 from torch.nn.utils import clip_grad_norm_
 # From transformers import general tokenizer
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer, BertModel
 from tqdm import tqdm
 import argparse
 
 import multihopkg.data_utils as data_utils
-import multihopkg.eval
 from multihopkg.emb.emb import EmbeddingBasedMethod
 from multihopkg.emb.fact_network import (
     ComplEx,
@@ -41,23 +40,18 @@ from multihopkg.emb.fact_network import (
     get_distmult_kg_state_dict,
 )
 from multihopkg.hyperparameter_range import hp_range
-from multihopkg.knowledge_graph import KnowledgeGraph, ITLKnowledgeGraph
+from multihopkg.knowledge_graph import KnowledgeGraph
 
 # LG: This immediately parses things. A script basically.
 from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
 from multihopkg.rl.graph_search.pg import ContinuousPolicyGradient, PolicyGradient
-from multihopkg.rl.graph_search.pn import ITLGraphSearchPolicy, GraphSearchPolicy
+from multihopkg.rl.graph_search.pn import ITLGraphEnvironment, GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
-from multihopkg.utils.convenience import not_implemented
+from multihopkg.utils.convenience import create_placeholder
 from multihopkg.logging import setup_logger
 from multihopkg.utils.setup import set_seeds
-from multihopkg.models.construction import (
-    construct_env_model,
-    construct_navagent,
-    construct_embedding_model,
-)
 from typing import Any, Dict, Tuple, List
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 
@@ -178,8 +172,8 @@ def losses_fn(mini_batch):
 # TODO: Finish this inner training loop.
 # TODO: 1: Assumes you arae happy with batch being passed (meaning you have to check its not too small)
 
-def prep_questions(questions: torch.Tensor, embedder: torch.PreTrainedTokenizer):
-    embedded_questions = embedder(questions)
+def prep_questions(questions: List[torch.Tensor], model: BertModel):
+    embedded_questions = model(questions)
     return embedded_questions
     
     
@@ -246,6 +240,9 @@ def train_multihopkg(
     start_epoch: int,
     train_data: List[torch.Tensor],
 ):
+
+    print("We got to multihopkg training")
+    exit()
 
     # Print Model Parameters + Perhaps some more information
     print('Model Parameters')
@@ -371,6 +368,7 @@ def train_multihopkg(
 
 def initialize_path(questions: torch.Tensor):
     # Questions must be turned into queries
+    raise NotImplementedError
     
 
 def rollout(
@@ -378,7 +376,7 @@ def rollout(
     kg: KnowledgeGraph,
     num_steps,
     navigator_agent: ContinuousPolicyGradient,
-    graphman: ITLGraphSearchPolicy,
+    graphman: ITLGraphEnvironment,
     questions: torch.Tensor, 
     visualize_action_probs=False,
 ):
@@ -397,7 +395,7 @@ def rollout(
 
     # Initialization
     # TOREM: Figure out how to get the dimension of the relationships and embeddings 
-    entity_shape = not_implemented(torch.tensor, "entity_shape","mlm_training.py::rollout()")
+    entity_shape = create_placeholder(torch.Tensor, "entity_shape","mlm_training.py::rollout()")
 
     # These are all very reinforcement-learning things
     log_action_probs = []
@@ -429,11 +427,15 @@ def rollout(
         # TODO: Make obseervations not rely on the question
         obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
 
+        # Our observations are composed simply of the places that we end up in. Perhaps the closest embedding that we find using something like ANN
+
+
         # TODO: (Mega): Oh yeah this is where we are getting all the shapes contorted and such.
         # Frankly, I think this is unecessary since we dont need to query available action spaces but rather just sample it
         # db_outcomes, inv_offset, policy_entropy = pn.transit(
         #     e, obs, kg
         # )
+
         sample_outcome = navigator_agent.sample_action(db_outcomes, inv_offset)
         action = sample_outcome['action_sample']
         # pn.update_path(action, kg) # TODO: Confirm this is actually needed
@@ -467,20 +469,6 @@ def main():
     # TODO: Muybe ? (They use it themselves)
     # initialize_model_directory(args, args.seed)
 
-    # Setting up the models
-    logger.info(":: (1/3) Loaded embedding model")
-    env = ITLGraphEnvironment(
-        relation_only=args.relation_only,
-        history_dim=args.history_dim,
-        history_num_layers=args.history_num_layers,
-        entity_dim=args.entity_dim,
-        relation_dim=args.relation_dim,
-        ff_dropout_rate=args.ff_dropout_rate,
-        xavier_initialization=args.xavier_initialization,
-        relation_only_in_path=args.relation_only_in_path,
-    )
-    logger.info(":: (2/3) Loaded environment module")
-
     ## Agent needs a Knowledge graph as well as the environment
     knowledge_graph = KnowledgeGraph(
         bandwidth = args.bandwidth,
@@ -495,8 +483,23 @@ def main():
         test = args.test,
         relation_only = args.relation_only,
     )
+    # Setting up the models
+    logger.info(":: (1/3) Loaded embedding model")
+    env = ITLGraphEnvironment(
+        entity_dim=args.entity_dim,
+        ff_dropout_rate=args.ff_dropout_rate,
+        history_dim=args.history_dim,
+        history_num_layers=args.history_num_layers,
+        knowledge_graph=knowledge_graph,
+        relation_dim=args.relation_dim,
+        relation_only=args.relation_only,
+        relation_only_in_path=args.relation_only_in_path,
+        xavier_initialization=args.xavier_initialization,
+    )
+    logger.info(":: (2/3) Loaded environment module")
 
-    nav_agent = PolicyGradient(
+
+    nav_agent = ContinuousPolicyGradient(
         args.use_action_space_bucketing,
         args.num_rollouts,
         args.baseline,
