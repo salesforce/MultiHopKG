@@ -183,7 +183,10 @@ class PolicyGradient(LFramework):
         log_action_probs = []
         action_entropy = []
 
-        # Dummy nodes ? TODO: Figur eout what they do.
+        #? Dummy nodes ? TODO: Figur eout what they do.
+        #* Answer:
+        #* This is for initialization of tensors, and making sure
+        #* that they have the right shape
         r_s = int_fill_var_cuda(e_s.size(), kg.dummy_start_r)
         seen_nodes = int_fill_var_cuda(e_s.size(), kg.dummy_e).unsqueeze(1)
         path_components = []

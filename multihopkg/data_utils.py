@@ -16,7 +16,6 @@ import pandas as pd
 import json
 from datetime import datetime
 
-
 START_RELATION = 'START_RELATION'
 NO_OP_RELATION = 'NO_OP_RELATION'
 NO_OP_ENTITY = 'NO_OP_ENTITY'
@@ -28,7 +27,6 @@ START_RELATION_ID = 1
 NO_OP_RELATION_ID = 2
 DUMMY_ENTITY_ID = 0
 NO_OP_ENTITY_ID = 1
-
 
 def check_answer_ratio(examples):
     entity_dict = {}

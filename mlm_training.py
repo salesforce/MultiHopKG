@@ -46,6 +46,7 @@ from multihopkg.knowledge_graph import KnowledgeGraph
 # LG: This immediately parses things. A script basically.
 from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
+from multihopkg.rl.graph_search.cpg import ContinuousPolicy
 from multihopkg.rl.graph_search.pg import PolicyGradient
 from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
@@ -78,6 +79,7 @@ def construct_models(args):
     models = {
         "GraphEmbedding": None,  # One of: Distmult, Complex, Conve
         "PolicyGradient": None,
+        "ContinuousPolicy": None,
         "RewardShapingPolicyGradient": None,
     }
 
@@ -349,6 +351,7 @@ def rollout(
     kg: KnowledgeGraph,
     num_steps,
     pn: PolicyGradient,
+    cpn: ContinuousPolicy, # Continuous Policy Network
     policy_network: GraphSearchPolicy,
     query: torch.Tensor,
     visualize_action_probs=False,
@@ -445,7 +448,40 @@ def main():
         relation_only = args.relation_only,
     )
 
+    #TODO: Gotta rewrite nav_agent for ContinuousPolicy
     nav_agent = PolicyGradient(
+        args.use_action_space_bucketing,
+        args.num_rollouts,
+        args.baseline,
+        args.beta,
+        args.gamma,
+        args.action_dropout_rate,
+        args.action_dropout_anneal_factor,
+        args.action_dropout_anneal_interval,
+        args.beam_size,
+        knowledge_graph,
+        env, # What you just created above
+        args.num_rollout_steps,
+        args.model_dir,
+        args.model,
+        args.data_dir,
+        args.batch_size,
+        args.train_batch_size,
+        args.dev_batch_size,
+        args.start_epoch,
+        args.num_epochs,
+        args.num_wait_epochs,
+        args.num_peek_epochs,
+        args.learning_rate,
+        args.grad_norm,
+        args.adam_beta1,
+        args.adam_beta2,
+        args.train,
+        args.run_analysis,
+    )
+
+    #TODO: Gotta rewrite nav_agent for ContinuousPolicy
+    nav_agent = ContinuousPolicy(
         args.use_action_space_bucketing,
         args.num_rollouts,
         args.baseline,

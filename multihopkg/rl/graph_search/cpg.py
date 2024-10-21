@@ -46,9 +46,72 @@ class ContinuousPolicy():
         raise  NotImplementedError
         # return (pred_e2 == e2).float()
 
+    #! This function is modified
+    def rollout(self, e_s, q, e_t, num_steps, kg, pn):
+        #! Changes:
+        #* kg is passed as an argument
+        #* pn is passed as an argument
+
+        #TODO: Do we need to include the description of every passed parameter?
+        #TODO: Do we need to document this method?
+        """
+        Rollout a batch of episodes.
+        """
+        assert (num_steps > 0)
+        
+        log_action_probs = []
+        action_entropy = []
+
+        r_s = int_fill_var_cuda(e_s.size(), kg.dummy_start_r)
+        seen_nodes = int_fill_var_cuda(e_s.size(), kg.dummy_e).unsqueeze(1)
+        path_components = []
+
+        # Save some history
+        path_trace = [(r_s, e_s)]
+        # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
+        pn.initialize_path((r_s, e_s), kg)
+
+        for t in range(num_steps):
+            last_r, e = path_trace[-1]
+            obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+
+            #* transit method has been remade, line below is modified
+            db_outcomes, inv_offset = pn.transit(
+                e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
+
+            #* sample_action method has been remade, line below is modified
+            sample_outcome, policy_entropy = self.sample_action(db_outcomes, inv_offset)
+
+            action = sample_outcome['action_sample']
+            pn.update_path(action, kg)
+            
+            action_prob = sample_outcome['action_prob']
+            log_action_probs.append(ops.safe_log(action_prob))
+            action_entropy.append(policy_entropy)
+            seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
+            path_trace.append(action)
+
+            #* If decided to visualize the action probabilities, uncomment
+            # if visualize_action_probs:
+            #     top_k_action = sample_outcome['top_actions']
+            #     top_k_action_prob = sample_outcome['top_action_probs']
+            #     path_components.append((e, top_k_action, top_k_action_prob))
+
+        pred_e2 = path_trace[-1][1]
+        self.record_path_trace(path_trace)
+
+        return {
+            'pred_e2': pred_e2,
+            'log_action_probs': log_action_probs,
+            'action_entropy': action_entropy,
+            'path_trace': path_trace,
+            'path_components': path_components
+        }
+
+
     def loss(self, mini_batch):
         
-        # TODO: CHeck if we want to do that
+        # TODO: Check if we want to do that
         def stablize_reward(r):
             r_2D = r.view(-1, self.num_rollouts)
             if self.baseline == 'avg_reward':
@@ -59,10 +122,10 @@ class ContinuousPolicy():
                 raise ValueError('Unrecognized baseline function: {}'.format(self.baseline))
             stabled_r = stabled_r_2D.view(-1)
             return stabled_r
-    
+
 
         ##################################
-        # Here we roll a batch of epusodes
+        # Here we roll a batch of episodes
         ##################################
         e1, e2, r = format_batch(mini_batch, num_tiles=self.num_rollouts)
         output = self.rollout(e1, r, e2, num_steps=self.num_rollout_steps)
