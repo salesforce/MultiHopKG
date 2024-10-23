@@ -59,6 +59,36 @@ class GraphSearchPolicy(nn.Module):
         self.fn = None
         self.fn_kg = None
 
+    #* Added
+    def get_action_space(self, e, obs, kg):
+        r_space, e_space = kg.action_space[0][0][e], kg.action_space[0][1][e]
+        action_mask = kg.action_space[1][e]
+        action_space = ((r_space, e_space), action_mask)
+        return action_space
+    
+    #* Added
+    def policy_nn_fun(self, X2):
+        """
+        Input comes from:
+            X = self.W1(X)
+            X = F.relu(X)
+            X = self.W1Dropout(X)
+            X = self.W2(X)
+            X2 = self.W2Dropout(X)
+        """
+
+        mu = self.mu_layer(X2)
+        log_sigma = self.sigma_layer(X2)
+        log_sigma = torch.clamp(log_sigma, min=-20, max=2)
+        sigma = torch.exp(log_sigma)
+
+        # Create a normal distribution using the mean and standard deviation
+        dist = torch.distributions.Normal(mu, sigma)
+        entropy = dist.entropy().sum(dim=-1)
+        return dist, entropy
+
+    #* Added
+
     def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         """
         Compute the next action distribution based onsample_action
@@ -156,10 +186,11 @@ class GraphSearchPolicy(nn.Module):
                 inv_offset = None
         else:
             action_space = self.get_action_space(e, obs, kg)
-            action_dist, entropy = policy_nn_fun(X2, action_space)
+            action_dist, entropy = policy_nn_fun(X2)
             db_outcomes = [(action_space, action_dist)]
             inv_offset = None
 
+        #! entropy should not be returned
         return db_outcomes, inv_offset, entropy
 
     def initialize_path(self, init_action, kg):

@@ -72,6 +72,7 @@ def construct_models(args):
     models = {
         "GraphEmbedding": None,  # One of: Distmult, Complex, Conve
         "PolicyGradient": None,
+        "ContinuousPolicy": None,
         "RewardShapingPolicyGradient": None,
     }
 
@@ -529,6 +530,8 @@ def main():
         args.train,
         args.run_analysis,
     )
+
+
 
     logger.info(":: (3/3) Loaded navigation agent")
     logger.info(":: Training the model")
