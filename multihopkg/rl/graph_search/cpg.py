@@ -1,8 +1,96 @@
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
+from multihopkg.rl.graph_search.pn import GraphSearchPolicy, ITLGraphEnvironment
 from multihopkg.utils import ops
 import torch
+from torch import nn
+from multihopkg.knowledge_graph import ITLKnowledgeGraph
 
-class ContinuousPolicy():
+
+class ContinuousPolicyGradient(nn.Module):
+    # TODO: remove all parameters that are irrelevant here
+    def __init__(
+        # TODO: remove all parameters that are irrelevant here
+        self,
+        num_rollouts: int,
+        baseline: str,
+        beta: float,
+        gamma: float,
+        action_dropout_rate: float,
+        action_dropout_anneal_factor: float,
+        action_dropout_anneal_interval: float,
+        beam_size: int,
+        kg: ITLKnowledgeGraph,
+        pn: ITLGraphEnvironment,
+        # Goodness this is ITLGraphEnvironment:
+        num_rollout_steps: int,
+        model_dir: str,
+        model: str,
+        data_dir: str,
+        batch_size: int,
+        train_batch_size: int,
+        dev_batch_size: int,
+        start_epoch: int,
+        num_epochs: int,
+        num_wait_epochs: int,
+        num_peek_epochs: int,
+        learning_rate: float,
+        grad_norm: float,
+        adam_beta1: float,
+        adam_beta2: float,
+        train: bool,
+        run_analysis: bool,
+    ):
+
+        super(ContinuousPolicyGradient, self).__init__(
+            model_dir,
+            model,
+            data_dir,
+            batch_size,
+            train_batch_size,
+            dev_batch_size,
+            start_epoch,
+            num_epochs,
+            num_wait_epochs,
+            num_peek_epochs,
+            learning_rate,
+            grad_norm,
+            adam_beta1,
+            adam_beta2,
+            train,
+            run_analysis,
+            kg,
+            pn,
+        )
+
+        # Training hyperparameters
+        self.use_action_space_bucketing = use_action_space_bucketing
+        self.num_rollouts = num_rollouts
+        self.num_rollout_steps = num_rollout_steps
+        self.baseline = baseline
+        self.beta = beta  # entropy regularization parameter
+        self.gamma = gamma  # shrinking factor
+        self.action_dropout_rate = action_dropout_rate
+        self.action_dropout_anneal_factor = (
+            action_dropout_anneal_factor  # Used in parent
+        )
+        self.action_dropout_anneal_interval = (
+            action_dropout_anneal_interval  # Also used by parent
+        )
+
+        # Inference hyperparameters
+        self.beam_size = beam_size
+
+        # Analysis
+        self.path_types = dict()
+        self.num_path_types = 0
+
+    def sample_action(
+        self,
+    ):
+        raise NotImplementedError
+
+
+class ContinuousPolicy:
 
     def __init__(
         self,
@@ -43,22 +131,22 @@ class ContinuousPolicy():
 
     def reward_fun(self, e1, r, e2, pred_e2):
         # TODO: Soft reward here.
-        raise  NotImplementedError
+        raise NotImplementedError
         # return (pred_e2 == e2).float()
 
     #! This function is modified
     def rollout(self, e_s, q, e_t, num_steps, kg, pn):
         #! Changes:
-        #* kg is passed as an argument
-        #* pn is passed as an argument
+        # * kg is passed as an argument
+        # * pn is passed as an argument
 
-        #TODO: Do we need to include the description of every passed parameter?
-        #TODO: Do we need to document this method?
+        # TODO: Do we need to include the description of every passed parameter?
+        # TODO: Do we need to document this method?
         """
         Rollout a batch of episodes.
         """
-        assert (num_steps > 0)
-        
+        assert num_steps > 0
+
         log_action_probs = []
         action_entropy = []
 
@@ -73,25 +161,26 @@ class ContinuousPolicy():
 
         for t in range(num_steps):
             last_r, e = path_trace[-1]
-            obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+            obs = [e_s, q, e_t, t == (num_steps - 1), last_r, seen_nodes]
 
-            #* transit method has been remade, line below is modified
+            # * transit method has been remade, line below is modified
             db_outcomes, inv_offset = pn.transit(
-                e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
+                e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing
+            )
 
-            #* sample_action method has been remade, line below is modified
+            # * sample_action method has been remade, line below is modified
             sample_outcome, policy_entropy = self.sample_action(db_outcomes, inv_offset)
 
-            action = sample_outcome['action_sample']
+            action = sample_outcome["action_sample"]
             pn.update_path(action, kg)
-            
-            action_prob = sample_outcome['action_prob']
+
+            action_prob = sample_outcome["action_prob"]
             log_action_probs.append(ops.safe_log(action_prob))
             action_entropy.append(policy_entropy)
             seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
             path_trace.append(action)
 
-            #* If decided to visualize the action probabilities, uncomment
+            # * If decided to visualize the action probabilities, uncomment
             # if visualize_action_probs:
             #     top_k_action = sample_outcome['top_actions']
             #     top_k_action_prob = sample_outcome['top_action_probs']
@@ -101,28 +190,30 @@ class ContinuousPolicy():
         self.record_path_trace(path_trace)
 
         return {
-            'pred_e2': pred_e2,
-            'log_action_probs': log_action_probs,
-            'action_entropy': action_entropy,
-            'path_trace': path_trace,
-            'path_components': path_components
+            "pred_e2": pred_e2,
+            "log_action_probs": log_action_probs,
+            "action_entropy": action_entropy,
+            "path_trace": path_trace,
+            "path_components": path_components,
         }
 
-
     def loss(self, mini_batch):
-        
+
         # TODO: Check if we want to do that
         def stablize_reward(r):
             r_2D = r.view(-1, self.num_rollouts)
-            if self.baseline == 'avg_reward':
+            if self.baseline == "avg_reward":
                 stabled_r_2D = r_2D - r_2D.mean(dim=1, keepdim=True)
-            elif self.baseline == 'avg_reward_normalized':
-                stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (r_2D.std(dim=1, keepdim=True) + ops.EPSILON)
+            elif self.baseline == "avg_reward_normalized":
+                stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (
+                    r_2D.std(dim=1, keepdim=True) + ops.EPSILON
+                )
             else:
-                raise ValueError('Unrecognized baseline function: {}'.format(self.baseline))
+                raise ValueError(
+                    "Unrecognized baseline function: {}".format(self.baseline)
+                )
             stabled_r = stabled_r_2D.view(-1)
             return stabled_r
-
 
         ##################################
         # Here we roll a batch of episodes
@@ -130,18 +221,17 @@ class ContinuousPolicy():
         e1, e2, r = format_batch(mini_batch, num_tiles=self.num_rollouts)
         output = self.rollout(e1, r, e2, num_steps=self.num_rollout_steps)
 
-
         ##################################
-        #Compute metrics from output
+        # Compute metrics from output
         ##################################
         # Compute policy gradient loss
-        pred_e2 = output['pred_e2']
-        log_action_probs = output['log_action_probs']
-        action_entropy = output['action_entropy']
+        pred_e2 = output["pred_e2"]
+        log_action_probs = output["log_action_probs"]
+        action_entropy = output["action_entropy"]
 
         # Compute discounted reward
         final_reward = self.reward_fun(e1, r, e2, pred_e2)
-        if self.baseline != 'n/a':
+        if self.baseline != "n/a":
             final_reward = stablize_reward(final_reward)
         cum_discounted_rewards = [0] * self.num_rollout_steps
         cum_discounted_rewards[-1] = final_reward
@@ -163,19 +253,20 @@ class ContinuousPolicy():
         pt_loss = (pt_loss - entropy * self.beta).mean()
 
         loss_dict = {}
-        loss_dict['model_loss'] = pg_loss
-        loss_dict['print_loss'] = float(pt_loss)
-        loss_dict['reward'] = final_reward
-        loss_dict['entropy'] = float(entropy.mean())
+        loss_dict["model_loss"] = pg_loss
+        loss_dict["print_loss"] = float(pt_loss)
+        loss_dict["reward"] = final_reward
+        loss_dict["entropy"] = float(entropy.mean())
         if self.run_analysis:
             fn = torch.zeros(final_reward.size())
             for i in range(len(final_reward)):
                 if not final_reward[i]:
                     if int(pred_e2[i]) in self.kg.all_objects[int(e1[i])][int(r[i])]:
                         fn[i] = 1
-            loss_dict['fn'] = fn
+            loss_dict["fn"] = fn
 
         return loss_dict
+
 
 def format_batch(batch_data, num_labels=-1, num_tiles=1):
     """
@@ -183,7 +274,7 @@ def format_batch(batch_data, num_labels=-1, num_tiles=1):
     """
     # TODO: Understand why this is needed
 
-    # This is the tiling happening again. 
+    # This is the tiling happening again.
     def convert_to_binary_multi_subject(e1):
         e1_label = zeros_var_cuda([len(e1), num_labels])
         for i in range(len(e1)):
@@ -216,4 +307,3 @@ def format_batch(batch_data, num_labels=-1, num_tiles=1):
         batch_r = ops.tile_along_beam(batch_r, num_tiles)
         batch_e2 = ops.tile_along_beam(batch_e2, num_tiles)
     return batch_e1, batch_e2, batch_r
-
