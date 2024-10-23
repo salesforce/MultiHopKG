@@ -310,7 +310,6 @@ class PolicyGradient(LFramework):
             log_prob = action_dist.log_prob(actions).sum(dim=-1)
             entropy = action_dist.entropy().sum(dim=-1)
 
-            return sample_outcome, entropy
 
         if inv_offset is not None:
             next_r_list = []
