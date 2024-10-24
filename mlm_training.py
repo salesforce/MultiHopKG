@@ -476,29 +476,29 @@ def main():
 
     ## Agent needs a Knowledge graph as well as the environment
     knowledge_graph = ITLKnowledgeGraph(
-        data_dir = args.data_dir,
-        model = args.model,
-        relation_dim = args.relation_dim,
-        emb_dropout_rate = args.emb_dropout_rate,
-        use_action_space_bucketing = args.use_action_space_bucketing,
-        relation_only = args.relation_only,
-        pretrained_embedding_type = args.pretrained_embedding_type,
-        pretrained_embedding_weights_path = args.pretrained_embedding_weights_path
+        data_dir=args.data_dir,
+        model=args.model,
+        emb_dropout_rate=args.emb_dropout_rate,
+        use_action_space_bucketing=args.use_action_space_bucketing,
+        relation_only=args.relation_only,
+        pretrained_embedding_type=args.pretrained_embedding_type,
+        pretrained_embedding_weights_path=args.pretrained_embedding_weights_path,
     )
 
+    # Information computed by knowldege graph for future dependency injection
+    entity_dim = knowledge_graph.get_entity_dim()
+    relation_dim = knowledge_graph.get_relation_dim()
     logger.info("You have reached the exit")
-    exit() # 🚩 This is how far we have pushed so far 🚩
-    # Now we load this from the embedding models
 
     # Setting up the models
     logger.info(":: (1/3) Loaded embedding model")
     env = ITLGraphEnvironment(
-        entity_dim=args.entity_dim,
+        entity_dim=entity_dim,
         ff_dropout_rate=args.ff_dropout_rate,
         history_dim=args.history_dim,
         history_num_layers=args.history_num_layers,
         knowledge_graph=knowledge_graph,
-        relation_dim=args.relation_dim,
+        relation_dim=relation_dim,
         relation_only=args.relation_only,
         relation_only_in_path=args.relation_only_in_path,
         xavier_initialization=args.xavier_initialization,
@@ -518,23 +518,26 @@ def main():
         knowledge_graph,
         env, # What you just created above
         args.num_rollout_steps,
-        args.model_dir,
-        args.model,
-        args.data_dir,
-        args.batch_size,
-        args.train_batch_size,
-        args.dev_batch_size,
-        args.start_epoch,
-        args.num_epochs,
-        args.num_wait_epochs,
-        args.num_peek_epochs,
-        args.learning_rate,
-        args.grad_norm,
-        args.adam_beta1,
-        args.adam_beta2,
-        args.train,
-        args.run_analysis,
-        args.embedding_weights_path
+        # args.beam_size,
+        # knowledge_graph,
+        # env,  # What you just created above
+        # args.model_dir,
+        # args.model,
+        # args.data_dir,
+        # args.batch_size,
+        # args.train_batch_size,
+        # args.dev_batch_size,
+        # args.start_epoch,
+        # args.num_epochs,
+        # args.num_wait_epochs,
+        # args.num_peek_epochs,
+        # args.learning_rate,
+        # args.grad_norm,
+        # args.adam_beta1,
+        # args.adam_beta2,
+        # args.train,
+        # args.run_analysis,
+        # args.embedding_weights_path,
     )
 
 

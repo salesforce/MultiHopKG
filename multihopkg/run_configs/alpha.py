@@ -30,16 +30,24 @@ def get_args() -> argparse.Namespace:
     ap.add_argument("--seed", type=int, default=420, metavar="S")
     ap.add_argument("--tokenizer", type=str, default="bert-base-uncased")
 
+    # New Paremters introduced by the new model
+    ap.add_argument("--pretrained_embedding_type",type=str,default="conve",help="The type of pretrained embedding to use")
+    ap.add_argument("--pretrained_embedding_weights_path",type=str,default="./models/itl/pretrained_embeddings.tar",help="Theh path to the pretrained embedding weights")
+    ap.add_argument("--emb_dropout_rate", type=float, default=0.3, help='Knowledge graph embedding dropout rate (default: 0.3)')
+    ap.add_argument("--relation_only",  action="store_true",  help='search with relation information only, ignoring entity representation (default: False)')
+    ap.add_argument('--history_dim', type=int, default=400, metavar='H',
+                        help='action history encoding LSTM hidden states dimension (default: 400)')
+    ap.add_argument('--history_num_layers', type=int, default=3, metavar='L',
+                        help='action history encoding LSTM number of layers (default: 1)')
+    ap.add_argument('--ff_dropout_rate', type=float, default=0.1,
+                        help='Feed-forward layer dropout rate (default: 0.1)')
+    ap.add_argument('--xavier_initialization', type=bool, default=True,
+                        help='Initialize all model parameters using xavier initialization (default: True)')
+
     # NOTE: Legacy Parameters
     # Might want to get rid of them as we see fit.
-    ap.add_argument("--relation_only", type=str, default="", help="")
-    ap.add_argument("--history_dim", type=str, default="", help="")
-    ap.add_argument("--history_num_layers", type=str, default="", help="")
-    ap.add_argument("--entity_dim", type=str, default="", help="")
-    ap.add_argument("--relation_dim", type=str, default="", help="")
-    ap.add_argument("--ff_dropout_rate", type=str, default="", help="")
-    ap.add_argument("--xavier_initialization", type=str, default="", help="")
-    ap.add_argument("--relation_only_in_path", type=str, default="", help="")
+    ap.add_argument('--relation_only_in_path', action='store_true',
+                        help='include intermediate entities in path (default: False)')
         
     ap.add_argument('--run_analysis', action='store_true',
                     help='run algorithm analysis and print intermediate results (default: False)')

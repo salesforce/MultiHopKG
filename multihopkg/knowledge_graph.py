@@ -436,7 +436,6 @@ class ITLKnowledgeGraph(nn.Module):
         self,
         data_dir: str,
         model: str,
-        relation_dim: int,
         emb_dropout_rate: float,
         use_action_space_bucketing: bool,
         relation_only: bool,
@@ -479,7 +478,6 @@ class ITLKnowledgeGraph(nn.Module):
         self.relation_only = relation_only
 
         # Define NN Modules
-        self.relation_dim = relation_dim
         self.emb_dropout_rate = emb_dropout_rate
         self.entity_embeddings = None
         self.relation_embeddings = None
@@ -530,6 +528,11 @@ class ITLKnowledgeGraph(nn.Module):
         
         # TODO: If using embedding types other than conve, we need to implement that ourselves
         # See rs_pg.py in that case
+        
+    def get_entity_dim(self):
+        return self.entity_dim
+    def get_relation_dim(self):
+        return self.relation_dim
         
     def get_centroid(self) -> torch.Tensor:
         return self.centroid
