@@ -514,10 +514,10 @@ class ITLKnowledgeGraph(nn.Module):
         # This happens regardless
         self.relation_embeddings = nn.Embedding(self.num_relations, self.relation_dim)
         self.RDropout = nn.Dropout(self.emb_dropout_rate)
-        
-        assert self.entity_embeddings is not None
-        ent_emb = self.entity_embeddings.weight.clone()
 
+        assert self.entity_embeddings is not None, "No support yet for relation only graphs"
+        self.centroid = calculate_entity_centroid(self.entity_embeddings)
+        
         # Load the dictionary here.
         if pretrained_embedding_type in ['conve']:
             kg_state_dict = dict()
@@ -531,11 +531,8 @@ class ITLKnowledgeGraph(nn.Module):
         # TODO: If using embedding types other than conve, we need to implement that ourselves
         # See rs_pg.py in that case
         
-    def calculate_entity_centroid(self):
-        assert self.entity_embeddings is not None
-        entity_centroid = torch.mean(self.entity_embeddings.weight, dim=0)
-        return entity_centroid
-        
+    def get_centroid(self) -> torch.Tensor:
+        return self.centroid
 
 
     def calculate_centroid(self) -> torch.Tensor:
@@ -543,3 +540,6 @@ class ITLKnowledgeGraph(nn.Module):
         return torch.tensor([])
 
 
+def calculate_entity_centroid(embeddings: nn.Embedding):
+    entity_centroid = torch.mean(embeddings.weight, dim=0)
+    return entity_centroid
