@@ -1,9 +1,12 @@
+from numpy import common_type
+from torch._C import _cuda_tunableop_set_max_tuning_duration
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 from multihopkg.rl.graph_search.pn import GraphSearchPolicy, ITLGraphEnvironment
 from multihopkg.utils import ops
 import torch
 from torch import nn
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
+from typing import Tuple
 
 
 class ContinuousPolicyGradient(nn.Module):
@@ -18,52 +21,36 @@ class ContinuousPolicyGradient(nn.Module):
         action_dropout_rate: float,
         action_dropout_anneal_factor: float,
         action_dropout_anneal_interval: float,
-        beam_size: int,
-        kg: ITLKnowledgeGraph,
-        pn: ITLGraphEnvironment,
-        # Goodness this is ITLGraphEnvironment:
         num_rollout_steps: int,
-        model_dir: str,
-        model: str,
-        data_dir: str,
-        batch_size: int,
-        train_batch_size: int,
-        dev_batch_size: int,
-        start_epoch: int,
-        num_epochs: int,
-        num_wait_epochs: int,
-        num_peek_epochs: int,
-        learning_rate: float,
-        grad_norm: float,
-        adam_beta1: float,
-        adam_beta2: float,
-        train: bool,
-        run_analysis: bool,
+        dim_action: int,
+        dim_hidden: int,
+        dim_observation: int,
+        # # Unused Legacy Parameters
+        # observation_dim: int,
+        # beam_size: int,
+        # kg: ITLKnowledgeGraph,
+        # pn: ITLGraphEnvironment,
+        # model_dir: str,
+        # model: str,
+        # data_dir: str,
+        # batch_size: int,
+        # train_batch_size: int,
+        # dev_batch_size: int,
+        # start_epoch: int,
+        # num_epochs: int,
+        # num_wait_epochs: int,
+        # num_peek_epochs: int,
+        # learning_rate: float,
+        # grad_norm: float,
+        # adam_beta1: float,
+        # adam_beta2: float,
+        # train: bool,
+        # run_analysis: bool,
+        # emebedding_weights_path: str,
     ):
-
-        super(ContinuousPolicyGradient, self).__init__(
-            model_dir,
-            model,
-            data_dir,
-            batch_size,
-            train_batch_size,
-            dev_batch_size,
-            start_epoch,
-            num_epochs,
-            num_wait_epochs,
-            num_peek_epochs,
-            learning_rate,
-            grad_norm,
-            adam_beta1,
-            adam_beta2,
-            train,
-            run_analysis,
-            kg,
-            pn,
-        )
+        super(ContinuousPolicyGradient, self).__init__()
 
         # Training hyperparameters
-        self.use_action_space_bucketing = use_action_space_bucketing
         self.num_rollouts = num_rollouts
         self.num_rollout_steps = num_rollout_steps
         self.baseline = baseline
@@ -77,17 +64,63 @@ class ContinuousPolicyGradient(nn.Module):
             action_dropout_anneal_interval  # Also used by parent
         )
 
-        # Inference hyperparameters
-        self.beam_size = beam_size
+        ########################################
+        # Torch Modules
+        ########################################
+        self.fc1, self.mu_layer, self.sigma_layer = self._define_modules(
+            input_dim=dim_observation, action_dim=dim_action, hidden_dim=dim_hidden
+        )
 
-        # Analysis
-        self.path_types = dict()
-        self.num_path_types = 0
+        # # Inference hyperparameters
+        # self.beam_size = beam_size
+        # # Analysis
+        # self.path_types = dict()
+        # self.num_path_types = 0
 
-    def sample_action(
+    def forward(self, observations: torch.Tensor):
+        return self._sample_action(observations)
+
+    def _sample_action(
         self,
+        observations: torch.Tensor,
     ):
+        # TODO: pull nura`s changes here
         raise NotImplementedError
+
+    def policy_nn_fun(self, X2: torch.Tensor):
+        """
+        Input comes from:
+            X = self.W1(X)
+            X = F.relu(X)
+            X = self.W1Dropout(X)
+            X = self.W2(X)
+            X2 = self.W2Dropout(X)
+        """
+
+        mu = self.mu_layer(X2)
+        log_sigma = self.sigma_layer(X2)
+        log_sigma = torch.clamp(log_sigma, min=-20, max=2)
+        sigma = torch.exp(log_sigma)
+
+        # Create a normal distribution using the mean and standard deviation
+        dist = torch.distributions.Normal(mu, sigma)
+        entropy = dist.entropy().sum(dim=-1)
+        return dist, entropy
+
+    def _define_modules(self, input_dim:int, action_dim: int, hidden_dim: int):
+
+        fc1 = nn.Linear(input_dim, hidden_dim)
+        
+        mu_layer = nn.Linear(hidden_dim, action_dim)
+        sigma_layer = nn.Linear(hidden_dim, action_dim)
+
+        return fc1, mu_layer, sigma_layer
+
+    def _reparemeteriztion(self, dist, action):
+        return dist.log_prob(action).sum(dim=-1)
+
+
+
 
 
 class ContinuousPolicy:
@@ -307,3 +340,30 @@ def format_batch(batch_data, num_labels=-1, num_tiles=1):
         batch_r = ops.tile_along_beam(batch_r, num_tiles)
         batch_e2 = ops.tile_along_beam(batch_e2, num_tiles)
     return batch_e1, batch_e2, batch_r
+
+
+def define_path_encoder(
+    action_dim: int,
+    ff_dropout_rate: float,
+    history_dim: int,
+    history_num_layers: int,
+) -> Tuple[nn.Module, nn.Module, nn.Module, nn.Module, nn.Module]:
+    """
+    We will deterine the input_dim outside of this
+
+    """
+
+    input_dim = action_dim
+    W1 = nn.Linear(input_dim, action_dim)
+    W2 = nn.Linear(action_dim, action_dim)
+
+    W1Dropout = nn.Dropout(p=ff_dropout_rate)
+    W2Dropout = nn.Dropout(p=ff_dropout_rate)
+
+    path_encoder = nn.LSTM(
+        input_size=action_dim,
+        hidden_size=history_dim,
+        num_layers=history_num_layers,
+        batch_first=True,
+    )
+    return W1, W2, W1Dropout, W2Dropout, path_encoder
