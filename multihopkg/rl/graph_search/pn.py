@@ -472,9 +472,6 @@ class ITLGraphEnvironment():
         self.relation_only_in_path = relation_only_in_path
         self.path = None
 
-        # Calcualte the Centroid
-        self.centroid = calculate_centroid()
-
         # Define the main modules:
         self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder = define_path_encoder(
             self.action_dim,

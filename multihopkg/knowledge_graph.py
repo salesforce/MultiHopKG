@@ -531,6 +531,12 @@ class ITLKnowledgeGraph(nn.Module):
         # TODO: If using embedding types other than conve, we need to implement that ourselves
         # See rs_pg.py in that case
         
+    def calculate_entity_centroid(self):
+        assert self.entity_embeddings is not None
+        entity_centroid = torch.mean(self.entity_embeddings.weight, dim=0)
+        return entity_centroid
+        
+
 
     def calculate_centroid(self) -> torch.Tensor:
         raise NotImplementedError
