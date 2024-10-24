@@ -18,9 +18,13 @@ from multihopkg.data_utils import load_index
 from multihopkg.data_utils import NO_OP_ENTITY_ID, NO_OP_RELATION_ID
 from multihopkg.data_utils import DUMMY_ENTITY_ID, DUMMY_RELATION_ID
 from multihopkg.data_utils import START_RELATION_ID
+from multihopkg.logging import setup_logger
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import int_var_cuda, var_cuda
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional
+from multihopkg.emb.fact_network import get_conve_nn_state_dict, get_conve_kg_state_dict, \
+    get_complex_kg_state_dict, get_distmult_kg_state_dict
+import pdb
 
 
 class KnowledgeGraph(nn.Module):
@@ -423,3 +427,113 @@ class KnowledgeGraph(nn.Module):
     @property
     def dummy_start_r(self):
         return START_RELATION_ID
+
+class ITLKnowledgeGraph(nn.Module):
+    """
+    This one will *not* be used for training embeddings but will rather load them and used them for Navigation.
+    """
+    def __init__(
+        self,
+        data_dir: str,
+        model: str,
+        relation_dim: int,
+        emb_dropout_rate: float,
+        use_action_space_bucketing: bool,
+        relation_only: bool,
+        pretrained_embedding_type: str,
+        pretrained_embedding_weights_path: str,
+    ):
+        super(ITLKnowledgeGraph, self).__init__()
+        self.entity2id, self.id2entity = {}, {}
+        self.relation2id, self.id2relation = {}, {}
+        self.type2id, self.id2type = {}, {}
+        self.entity2typeid = {}
+        self.adj_list = None
+
+        self.action_space = None
+        self.action_space_buckets = None
+        self.unique_r_space = None
+        self.relation_only = relation_only
+
+        self.train_subjects = None
+        self.train_objects = None
+        self.dev_subjects = None
+        self.dev_objects = None
+        self.all_subjects = None
+        self.all_objects = None
+        self.train_subject_vectors = None
+        self.train_object_vectors = None
+        self.dev_subject_vectors = None
+        self.dev_object_vectors = None
+        self.all_subject_vectors = None
+        self.all_object_vectors = None
+
+        self.logger = setup_logger(__name__)
+
+        print('** Create {} knowledge graph **'.format(model))
+        # TODO: Implement when we find them needed
+        # self.load_graph_data(data_dir)
+        # self.load_all_answers(data_dir)
+        self.data_dir = data_dir
+        self.use_action_space_bucketing = use_action_space_bucketing
+        self.relation_only = relation_only
+
+        # Define NN Modules
+        self.relation_dim = relation_dim
+        self.emb_dropout_rate = emb_dropout_rate
+        self.entity_embeddings = None
+        self.relation_embeddings = None
+        self.entity_img_embeddings = None
+        self.relation_img_embeddings = None
+        self.EDropout = None
+        self.RDropout = None
+
+        # Ensure that the weights exist otherwise raise an error
+        if not os.path.exists(pretrained_embedding_weights_path):
+            raise FileNotFoundError(f"The pretrained embedding weights file {pretrained_embedding_weights_path} does not exist")
+        self.logger.info(f"Loading pretrained embedding weights from {pretrained_embedding_weights_path}")
+        overcomplete_state_dict = torch.load(pretrained_embedding_weights_path)
+        relation_embeddings = overcomplete_state_dict['state_dict']['kg.relation_embeddings.weight']
+        entity_embeddings = overcomplete_state_dict['state_dict']['kg.entity_embeddings.weight']
+        self.num_entities = entity_embeddings.shape[0]
+        self.num_relations = relation_embeddings.shape[0]
+        self.logger.info(f"Pretrained weights contain number of entities: {self.num_entities}")
+        self.logger.info(f"Pretrained weights contain number of relations: {self.num_relations}")
+
+        # Careful: This might only work for conve
+        self.entity_dim = entity_embeddings.shape[1]
+        self.relation_dim = relation_embeddings.shape[1]
+
+        # Define the Embeddings
+        self.entity_embeddings = None
+        self.EDropout = None
+        if not self.relation_only:
+            # This is what matters to us
+            self.entity_embeddings = nn.Embedding(self.num_entities, self.entity_dim)
+            self.EDropout = nn.Dropout(self.emb_dropout_rate)
+        # This happens regardless
+        self.relation_embeddings = nn.Embedding(self.num_relations, self.relation_dim)
+        self.RDropout = nn.Dropout(self.emb_dropout_rate)
+        
+        assert self.entity_embeddings is not None
+        ent_emb = self.entity_embeddings.weight.clone()
+
+        # Load the dictionary here.
+        if pretrained_embedding_type in ['conve']:
+            kg_state_dict = dict()
+            for param_name in ['kg.entity_embeddings.weight', 'kg.relation_embeddings.weight']:
+                kg_state_dict[param_name.split('.', 1)[1]] = overcomplete_state_dict['state_dict'][param_name]
+            self.load_state_dict(kg_state_dict)
+            self.logger.info(f"Loaded pretrained embedding weights from {pretrained_embedding_weights_path}")
+        else: 
+            raise NotImplementedError(f"The pretrained embedding type {pretrained_embedding_type} is not implemented")
+        
+        # TODO: If using embedding types other than conve, we need to implement that ourselves
+        # See rs_pg.py in that case
+        
+
+    def calculate_centroid(self) -> torch.Tensor:
+        raise NotImplementedError
+        return torch.tensor([])
+
+

@@ -6,7 +6,7 @@
  
  Experiment Portal.
 """
-
+import pdb
 import copy
 import itertools
 import json
@@ -40,12 +40,13 @@ from multihopkg.emb.fact_network import (
     get_distmult_kg_state_dict,
 )
 from multihopkg.hyperparameter_range import hp_range
-from multihopkg.knowledge_graph import KnowledgeGraph
+from multihopkg.knowledge_graph import ITLKnowledgeGraph
 
 # LG: This immediately parses things. A script basically.
 from multihopkg.learn_framework import LFramework
 from multihopkg.run_configs import alpha
-from multihopkg.rl.graph_search.pg import ContinuousPolicyGradient, PolicyGradient
+from multihopkg.rl.graph_search.pg import  PolicyGradient
+from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
 from multihopkg.rl.graph_search.pn import ITLGraphEnvironment, GraphSearchPolicy
 from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
 from multihopkg.utils.ops import flatten
@@ -181,7 +182,7 @@ def prep_questions(questions: List[torch.Tensor], model: BertModel):
 def batch_loop(
     mini_batch: List[torch.Tensor], # Perhaps change this ?
     grad_norm: float,
-    kg: KnowledgeGraph,
+    kg: ITLKnowledgeGraph,
     navigator: nn.Module,
     optimizer: torch.optim.Optimizer, # type: ignore
     pn: GraphSearchPolicy,
@@ -234,7 +235,7 @@ def train_multihopkg(
     epochs: int,
     nav_agent: nn.Module,
     grad_norm: float,
-    kg: KnowledgeGraph,
+    kg: ITLKnowledgeGraph,
     learning_rate: float,
     num_rollout_steps: int,
     pn: GraphSearchPolicy,
@@ -374,7 +375,7 @@ def initialize_path(questions: torch.Tensor):
 
 def rollout(
     # TODO: self.mdl should point to (policy network)
-    kg: KnowledgeGraph,
+    kg: ITLKnowledgeGraph,
     num_steps,
     navigator_agent: ContinuousPolicyGradient,
     graphman: ITLGraphEnvironment,
@@ -425,8 +426,11 @@ def rollout(
         # I Dont think changing this is necessary
         last_r, e = path_trace[-1]
 
+        # Ask the navigator to navigate
+        navigator_agent()
+
         # TODO: Make obseervations not rely on the question
-        obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+        cur_obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
 
         # Our observations are composed simply of the places that we end up in. Perhaps the closest embedding that we find using something like ANN
 
@@ -471,19 +475,21 @@ def main():
     # initialize_model_directory(args, args.seed)
 
     ## Agent needs a Knowledge graph as well as the environment
-    knowledge_graph = KnowledgeGraph(
-        bandwidth = args.bandwidth,
+    knowledge_graph = ITLKnowledgeGraph(
         data_dir = args.data_dir,
         model = args.model,
-        entity_dim = args.entity_dim,
         relation_dim = args.relation_dim,
         emb_dropout_rate = args.emb_dropout_rate,
-        num_graph_convolution_layers = args.num_graph_convolution_layers,
         use_action_space_bucketing = args.use_action_space_bucketing,
-        bucket_interval = args.bucket_interval,
-        test = args.test,
         relation_only = args.relation_only,
+        pretrained_embedding_type = args.pretrained_embedding_type,
+        pretrained_embedding_weights_path = args.pretrained_embedding_weights_path
     )
+
+    logger.info("You have reached the exit")
+    exit() # 🚩 This is how far we have pushed so far 🚩
+    # Now we load this from the embedding models
+
     # Setting up the models
     logger.info(":: (1/3) Loaded embedding model")
     env = ITLGraphEnvironment(
@@ -501,7 +507,6 @@ def main():
 
 
     nav_agent = ContinuousPolicyGradient(
-        args.use_action_space_bucketing,
         args.num_rollouts,
         args.baseline,
         args.beta,
@@ -529,6 +534,7 @@ def main():
         args.adam_beta2,
         args.train,
         args.run_analysis,
+        args.embedding_weights_path
     )
 
 
