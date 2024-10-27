@@ -15,6 +15,7 @@ from transformers import PreTrainedTokenizer
 import pandas as pd
 import json
 from datetime import datetime
+import pdb
 
 START_RELATION = 'START_RELATION'
 NO_OP_RELATION = 'NO_OP_RELATION'
@@ -488,6 +489,7 @@ def process_qa_data(
 
     ## Prepare the language data
     qna = qna.map(lambda x: str(text_tokenizer.encode(x, add_special_tokens=False)))
+    specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
 
     ## Prepare metadata for export
     # Tokenize the text by applying a pandas map function
@@ -498,12 +500,12 @@ def process_qa_data(
         "question_column": question_col_idx,
         "0-index_column": True,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_path": specific_name
     }
 
     new_df = pd.concat([paths, qna], axis=1)
 
     # Hyper Parametsrs name_{value}
-    specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
     new_df.to_csv(specific_name, index=False)
     with open(cached_QAPathData_path.replace(".csv", ".json"), "w") as f:
         json.dump(metadata, f)

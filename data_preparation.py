@@ -32,11 +32,13 @@ def process_qa_data(raw_data_dir: str,  cache_data_dir: str, text_tokenizer: str
         f"---> cache_data_dir: {cache_data_dir}\n"
         f"---> text_tokenizer: {text_tokenizer}\n"
     )
-    data_utils.process_qa_data(
+
+    _, metadata = data_utils.process_qa_data(
         raw_data_dir,
         cache_data_dir,
         tokenizer,
     )
+    logger.info(f"Done. Result dumped at : \n\033[93m{metadata['saved_path']}\033[0m")
 
 
 def all_arguments(valid_operations: list) -> argparse.Namespace:
