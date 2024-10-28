@@ -8,20 +8,25 @@
 """
 
 import collections
-import numpy as np
-import os
-import pickle
-from transformers import PreTrainedTokenizer
-import pandas as pd
 import json
-from datetime import datetime
+import os
 import pdb
+import pickle
+from datetime import datetime
 
-START_RELATION = 'START_RELATION'
-NO_OP_RELATION = 'NO_OP_RELATION'
-NO_OP_ENTITY = 'NO_OP_ENTITY'
-DUMMY_RELATION = 'DUMMY_RELATION'
-DUMMY_ENTITY = 'DUMMY_ENTITY'
+import numpy as np
+import pandas as pd
+from rich import traceback
+from torch.nn import Embedding as nn_Embedding
+from transformers import PreTrainedTokenizer
+
+traceback.install()
+
+START_RELATION = "START_RELATION"
+NO_OP_RELATION = "NO_OP_RELATION"
+NO_OP_ENTITY = "NO_OP_ENTITY"
+DUMMY_RELATION = "DUMMY_RELATION"
+DUMMY_ENTITY = "DUMMY_ENTITY"
 
 DUMMY_RELATION_ID = 0
 START_RELATION_ID = 1
@@ -94,8 +99,16 @@ def load_seen_entities(adj_list_path, entity_index_path):
                 seen_entities.add(id2entity[e2])
     print('{} seen entities loaded...'.format(len(seen_entities)))
     return seen_entities
- 
-def load_triples_with_label(data_path, r, entity_index_path, relation_index_path, seen_entities=None, verbose=False):
+
+
+def load_triples_with_label(
+    data_path,
+    r,
+    entity_index_path,
+    relation_index_path,
+    seen_entities=None,
+    verbose=False,
+):
     entity2id, _ = load_index(entity_index_path)
     relation2id, _ = load_index(relation_index_path)
 
@@ -117,8 +130,16 @@ def load_triples_with_label(data_path, r, entity_index_path, relation_index_path
             labels.append(label.strip())
     return triples, labels
 
-def load_triples(data_path, entity_index_path, relation_index_path, group_examples_by_query=False,
-                 add_reverse_relations=False, seen_entities=None, verbose=False):
+
+def load_triples(
+    data_path,
+    entity_index_path,
+    relation_index_path,
+    group_examples_by_query=False,
+    add_reverse_relations=False,
+    seen_entities=None,
+    verbose=False,
+):
     """
     Convert triples stored on disc into indices.
     """
@@ -185,7 +206,10 @@ def load_index(input_path):
             rev_index[i] = v
     return index, rev_index
 
-def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mode, add_reverse_relations=True):
+
+def prepare_kb_envrioment(
+    raw_kb_path, train_path, dev_path, test_path, test_mode, add_reverse_relations=True
+):
     """
     Process KB data which was saved as a set of triples.
         (a) Remove train and test triples from the KB envrionment.
@@ -479,7 +503,9 @@ def process_qa_data(
     ## ----------
     ## Processing
     csv_df = pd.read_csv(raw_QAPathData_path)
-    assert len(csv_df.columns) > 5, "The CSV file should have at least 5 columns. One triplet and one QA pair"
+    assert (
+        len(csv_df.columns) > 5
+    ), "The CSV file should have at least 5 columns. One triplet and one QA pair"
     question_col_idx = len(csv_df.columns) - 2
 
     ## Prepare specific triplets/path
@@ -488,7 +514,7 @@ def process_qa_data(
     num_path_cols = len(paths.columns)
 
     ## Prepare the language data
-    qna = qna.map(lambda x: str(text_tokenizer.encode(x, add_special_tokens=False)))
+    qna = qna.map(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
     specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
 
     ## Prepare metadata for export
@@ -500,14 +526,17 @@ def process_qa_data(
         "question_column": question_col_idx,
         "0-index_column": True,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "saved_path": specific_name
+        "saved_path": specific_name,
     }
 
     new_df = pd.concat([paths, qna], axis=1)
 
+    dir_name = os.path.dirname(specific_name)
+    os.makedirs(dir_name, exist_ok=True)
+
     # Hyper Parametsrs name_{value}
-    new_df.to_csv(specific_name, index=False)
-    with open(cached_QAPathData_path.replace(".csv", ".json"), "w") as f:
+    new_df.to_parquet(specific_name, index=False)
+    with open(specific_name.replace(".parquet", ".json"), "w") as f:
         json.dump(metadata, f)
 
     return new_df, metadata
