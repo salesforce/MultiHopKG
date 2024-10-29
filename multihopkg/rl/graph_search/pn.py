@@ -480,12 +480,37 @@ class ITLGraphEnvironment():
             self.history_encoder_num_layers,
         )
 
-        # Set policy network modules
+    def get_question_embeddings(self, questions: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Will take a list of list of token ids, pad them and then pass them to the embedding module to get single embeddings for each question
+        Args:
+            - questions (List[List[int]]): The tensor denoting the questions for this batch.
+        Return:
+            - questions_embeddings (torch.Tensor): The embeddings of the questions.
+        """
+        if self.question_embedding_module_trainable:
+            self.question_embedding_module.train()
+        else:
+            self.question_embedding_module.eval()
 
-        # Fact network modules
-        self.fn = None
-        self.fn_kg = None
+        # Questions are of oshape List[torch.Tensor] This can be converted to -> List[torch[int]] where the inner torch is of different values
+        # Then we can Imagine this to be a td concatenation where We have a single 1 
 
+        # Format the input for the legacy funciton inside 
+        tensorized_questions = [torch.from_numpy(q).to(torch.int32).view(1,-1) for q in questions] 
+        # We should conver them to embeddinggs before sending them over
+        
+        padded_tokens, attention_mask = ops.pad_and_cat(
+            tensorized_questions, padding_value=self.padding_value, padding_dim=1
+        )
+        embedding_output = self.question_embedding_module(
+            input_ids=padded_tokens, attention_mask=attention_mask
+        )
+        last_hidden_state = embedding_output.last_hidden_state
+        final_embedding = last_hidden_state.mean(dim=1)
+
+        return final_embedding
+    
     def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         # This one will simply find the closes emebdding in our class and dump it here as an observation
         raise NotImplementedError 
