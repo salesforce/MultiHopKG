@@ -444,40 +444,40 @@ class ITLGraphEnvironment():
 
     def __init__(
         self,
+        question_embedding_module: nn.Module, # Generally a BertModel
+        question_embedding_module_trainable: bool,
         entity_dim: int,
         ff_dropout_rate: float,
         history_dim: int,
         history_num_layers: int,
-        knowledge_graph: KnowledgeGraph,
+        knowledge_graph: ITLKnowledgeGraph,
         relation_dim: int,
-        relation_only: bool,
         relation_only_in_path: bool,
         xavier_initialization: bool,
     ):
-        # WARN: I am erasing self.model because I cannot see it being used anywhere here
-        # self.model = model
-
-        self.entity_dim = entity_dim
-        self.history_dim = history_dim # History is STATE
-        # self.relation_dim = relation_dim # For now we dont need it 
-        self.history_encoder_num_layers = history_num_layers  
-
-        self.ff_dropout_rate = ff_dropout_rate
-        # WARN: Same here. Not seemingy used anywheres
-        # self.rnn_dropout_rate = rnn_dropout_rate
-        # self.action_dropout_rate = action_dropout_rate
-        self.xavier_initialization = xavier_initialization
+        # Should be injected via information extracted from Knowledge Grap
         self.action_dim = relation_dim # TODO: Ensure this is a solid default
-
-        self.relation_only_in_path = relation_only_in_path
+        self.question_embedding_module = question_embedding_module
+        self.question_embedding_module_trainable = question_embedding_module_trainable
+        self.question_dim = self.question_embedding_module.config.hidden_size
+        self.entity_dim = entity_dim
+        self.ff_dropout_rate = ff_dropout_rate
+        self.history_dim = history_dim # History is STATE
+        self.history_encoder_num_layers = history_num_layers  
+        self.knowledge_graph = knowledge_graph
+        self.padding_value = question_embedding_module.config.pad_token_id # TODO (mega): Confirm this is correct to get the padding value
         self.path = None
+        self.relation_dim = relation_dim
+        self.relation_only_in_path = relation_only_in_path
+        self.xavier_initialization = xavier_initialization
 
-        # Define the main modules:
-        self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder = define_path_encoder(
-            self.action_dim,
+        (self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder) = self._define_modules(
+            self.entity_dim,
             self.ff_dropout_rate,
             self.history_dim,
             self.history_encoder_num_layers,
+            self.relation_dim,
+            self.question_dim
         )
 
     def get_question_embeddings(self, questions: List[torch.Tensor]) -> torch.Tensor:
@@ -507,23 +507,98 @@ class ITLGraphEnvironment():
             input_ids=padded_tokens, attention_mask=attention_mask
         )
         last_hidden_state = embedding_output.last_hidden_state
+        # TODO: Figure out if we want to grab a single one of the embeddings or just aggregaate them through mean.
         final_embedding = last_hidden_state.mean(dim=1)
 
         return final_embedding
     
+    # TOREM: Possibly unecessary here
     def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
         # This one will simply find the closes emebdding in our class and dump it here as an observation
-        raise NotImplementedError 
+        return self.get_observations(obs) # type: ignore
 
-    def get_observation(action): 
-        raise NotImplementedError
+    def _define_modules(
+        self,
+        entity_dim: int,
+        ff_dropout_rate: float,
+        history_dim: int,
+        history_num_layers: int,
+        relation_dim: int,
+        question_dim: int,
+    ) -> Tuple[nn.Module, nn.Module, nn.Module, nn.Module, nn.Module]:
+        # We assume both relationships and entityes have mbeddings
+        print(f"entity_dim: {entity_dim}, relation_dim: {relation_dim}")
+        input_dim = history_dim + entity_dim + relation_dim
+        # We assume action_dim is relation_dim
+        action_dim = relation_dim
+
+        W1 = nn.Linear(input_dim, action_dim)
+        W2 = nn.Linear(action_dim, action_dim)
+        W1Dropout = nn.Dropout(p=ff_dropout_rate)
+        W2Dropout = nn.Dropout(p=ff_dropout_rate)
+        # TODO: check if we are happy with input_size. I dont know if relation_dim and action_dim is what we want to use.
+        path_encoder = nn.LSTM(
+            input_size=action_dim + question_dim,
+            hidden_size=history_dim,
+            num_layers=history_num_layers,
+            batch_first=True,
+        )
+
+        # State Variables for holding rollout information
+        # I might regret this
+        self.current_position = None
+
+        return W1, W2, W1Dropout, W2Dropout, path_encoder
+
+    def get_observations(self, actions: torch.Tensor): 
+        """
+        Args:
+            - actions (torch.Tensor): Shall be of shape (batch_size, action_dimension)
+        """
+        # Current States, what are they ? THey ar thepoints at which the the agent displaces itsself
+        # But it needs to have some sense of sequentiality. Something like 
+        assert (
+            isinstance(self.current_position, torch.Tensor)
+        ), f"invalid self.current_position, type: {type(self.current_position)}.Please make sure to run ITLKnowledgeGraph::rest() before running get_observations."
+
+        new_states = self.current_position + actions
+        ann_states = run_ann(new_states)  #
+
+        self.current_position = ann_states
+
+        return self.current_position
+    
+    def reset(self, questions: torch.Tensor):
+        """
+        Will reset the episode to the initial position
+        This will happen by grabbign the questions embeddings, concatenating them with the centroid and then passing them to the environment
+        Args:
+            - questions (torch.Tensor): The tensor denoting the questions for this batch.
+        Returnd:
+            - None
+        """
+        if self.current_position is not None:
+            raise RuntimeError(
+                "self.current_position is has a non-None value. This is a sign that the episode did not end properly. Please look into this"
+            )
+
+        # Questions will be of shape (batch_size, bert_hidden_dim). So we want to concatenate on the last dimension
+        centroid = self.knowledge_graph.get_centroid() 
+        tiled_centroids = centroid.unsqueeze(0).repeat(len(questions), 1)
+        concatenations = torch.cat([questions, tiled_centroids], dim=-1)
+        concatenations_w_sequence = concatenations.unsqueeze(1)
+
+        # TODO: Check if this aligns with the original vision of path encodeer.
+        # I am passing the entire sequence. I feel like it should be this way.
+        self.current_position = self.path_encoder(concatenations_w_sequence)
+        return self.current_position
 
     def calculate_centroid() -> torch.Tensor:
         raise NotImplementedError
 
     def get_centroid(self) -> torch.Tensor:
         if not self.centroid:
-            self.centroid = self.calculate_centroid()
+            self.centroid = self.knowledge_graph.get_centroid()
         return self.centroid
 
     def calculate_reward():
