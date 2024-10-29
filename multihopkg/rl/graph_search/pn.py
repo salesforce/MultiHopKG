@@ -590,11 +590,11 @@ class ITLGraphEnvironment():
 
         # TODO: Check if this aligns with the original vision of path encodeer.
         # I am passing the entire sequence. I feel like it should be this way.
-        self.current_position = self.path_encoder(concatenations_w_sequence)
+        pathencoder_output, _ = self.path_encoder(concatenations_w_sequence)
+        # Also not sure if simply taking the last output is good here. We shall see.
+        self.current_position = pathencoder_output[:,-1,:].squeeze() # This way we get a 2d output
         return self.current_position
 
-    def calculate_centroid() -> torch.Tensor:
-        raise NotImplementedError
 
     def get_centroid(self) -> torch.Tensor:
         if not self.centroid:
