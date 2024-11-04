@@ -20,6 +20,8 @@ from rich import traceback
 from torch.nn import Embedding as nn_Embedding
 from transformers import PreTrainedTokenizer
 
+from  multihopkg.utils.setup import get_git_root
+
 traceback.install()
 
 START_RELATION = "START_RELATION"
@@ -557,6 +559,13 @@ def process_qa_data(
     ## Prepare the language data
     qna = qna.map(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
     specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
+    pdb.set_trace()
+
+    repo_root = get_git_root()
+    if repo_root is None:
+        raise ValueError("Cannot get the git root path. Please make sure you are running a clone of the repo")
+    # remove prefix before git_root to get the path relative to the git root
+    specific_name = specific_name.replace(repo_root + "/", "")
 
     ## Prepare metadata for export
     # Tokenize the text by applying a pandas map function
