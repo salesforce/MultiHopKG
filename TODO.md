@@ -2,6 +2,7 @@
 
 (Descending Priority)
 
+- [ ] Ensure that all the parts of tehe computation graph are connecting and calcuating things.
 - [ ] Create script for splitting tripplet dataset into different splits
 - [ ] Implement Knowledge base well enough to the point that we can change it to our will.
     - [ ] Find how to generate the `entity2idx.txt` in our implementation of the thing.

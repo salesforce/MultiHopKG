@@ -6,94 +6,38 @@
  
  Experiment Portal.
 """
-import pdb
-import copy
-import itertools
+import argparse
 import json
+import logging
 import os
-import random
-import sys
-from datetime import datetime
-from pathlib import Path
+from typing import List, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
-import torch.optim as optim
 from torch import nn
-import logging
-
-from torch.nn.utils import clip_grad_norm_
-# From transformers import general tokenizer
-from transformers import AutoTokenizer, PreTrainedTokenizer, BertModel
+from rich import traceback
 from tqdm import tqdm
-import argparse
+from transformers import AutoModel, AutoTokenizer, BertModel, PreTrainedTokenizer, BartConfig
 
 import multihopkg.data_utils as data_utils
-from multihopkg.emb.emb import EmbeddingBasedMethod
-from multihopkg.emb.fact_network import (
-    ComplEx,
-    ConvE,
-    DistMult,
-    get_complex_kg_state_dict,
-    get_conve_kg_state_dict,
-    get_distmult_kg_state_dict,
-)
-from multihopkg.hyperparameter_range import hp_range
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
-
-# LG: This immediately parses things. A script basically.
-from multihopkg.learn_framework import LFramework
-from multihopkg.run_configs import alpha
-from multihopkg.rl.graph_search.pg import  PolicyGradient
-from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
-from multihopkg.rl.graph_search.pn import ITLGraphEnvironment, GraphSearchPolicy
-from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
-from multihopkg.utils.ops import flatten
-from multihopkg.utils.convenience import create_placeholder
 from multihopkg.logging import setup_logger
+from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
+from multihopkg.rl.graph_search.pn import ITLGraphEnvironment
+from multihopkg.run_configs import alpha
 from multihopkg.utils.setup import set_seeds
-from typing import Any, Dict, Tuple, List
-from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
+from multihopkg.vector_search import ANN_IndexMan
+from multihopkg.environments import Observation
+from multihopkg.language_models import HunchLLM, collate_token_ids_batch
+import pdb
 
+traceback.install()
 
 
 def initialize_model_directory(args, random_seed=None):
     # add model parameter info to model directory
     # TODO: We might2ant our implementation of something like this later
     raise NotImplementedError
-
-
-def construct_models(args):
-    """
-    Will load or construct the models for the experiment
-    """
-    # TODO: Get the model constructed well
-    raise NotImplementedError
-    models = {
-        "GraphEmbedding": None,  # One of: Distmult, Complex, Conve
-        "PolicyGradient": None,
-        "ContinuousPolicy": None,
-        "RewardShapingPolicyGradient": None,
-    }
-
-    # for model_name, model in models.items():
-    #     if model_name == "GraphEmbedding":
-    #         model = construct_graph_embedding_model(args)
-    #     elif model_name == "PolicyGradient":
-    #         model = construct_policy_gradient_model(args)
-    #     elif model_name == "RewardShapingPolicyGradient":
-    #         model = construct_reward_shaping_policy_gradient_model(args)
-    #     else:
-    #         raise NotImplementedError
-
-
-
-# TODO: re-implement this ?
-# def inference(lf):
-# ... ( you can find it in ./multihopkg/experiments.py )
-
-
 
 def initial_setup() -> Tuple[argparse.Namespace, PreTrainedTokenizer, logging.Logger]:
     global logger
@@ -103,173 +47,94 @@ def initial_setup() -> Tuple[argparse.Namespace, PreTrainedTokenizer, logging.Lo
     logger = setup_logger("__MAIN__")
 
     # Get Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
 
     assert isinstance(args, argparse.Namespace)
 
     return args, tokenizer, logger
 
-
-
-def losses_fn(mini_batch):
-    # TODO:
-    raise NotImplementedError
-    # def stablize_reward(r):
-    #     r_2D = r.view(-1, self.num_rollouts)
-    #     if self.baseline == 'avg_reward':
-    #         stabled_r_2D = r_2D - r_2D.mean(dim=1, keepdim=True)
-    #     elif self.baseline == 'avg_reward_normalized':
-    #         stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (r_2D.std(dim=1, keepdim=True) + ops.EPSILON)
-    #     else:
-    #         raise ValueError('Unrecognized baseline function: {}'.format(self.baseline))
-    #     stabled_r = stabled_r_2D.view(-1)
-    #     return stabled_r
-    #
-    # e1, e2, r = self.format_batch(mini_batch, num_tiles=self.num_rollouts)
-    # output = self.rollout(e1, r, e2, num_steps=self.num_rollout_steps)
-    #
-    # # Compute policy gradient loss
-    # pred_e2 = output['pred_e2']
-    # log_action_probs = output['log_action_probs']
-    # action_entropy = output['action_entropy']
-    #
-    # # Compute discounted reward
-    # final_reward = self.reward_fun(e1, r, e2, pred_e2)
-    # if self.baseline != 'n/a':
-    #     final_reward = stablize_reward(final_reward)
-    # cum_discounted_rewards = [0] * self.num_rollout_steps
-    # cum_discounted_rewards[-1] = final_reward
-    # R = 0
-    # for i in range(self.num_rollout_steps - 1, -1, -1):
-    #     R = self.gamma * R + cum_discounted_rewards[i]
-    #     cum_discounted_rewards[i] = R
-    #
-    # # Compute policy gradient
-    # pg_loss, pt_loss = 0, 0
-    # for i in range(self.num_rollout_steps):
-    #     log_action_prob = log_action_probs[i]
-    #     pg_loss += -cum_discounted_rewards[i] * log_action_prob
-    #     pt_loss += -cum_discounted_rewards[i] * torch.exp(log_action_prob)
-    #
-    # # Entropy regularization
-    # entropy = torch.cat([x.unsqueeze(1) for x in action_entropy], dim=1).mean(dim=1)
-    # pg_loss = (pg_loss - entropy * self.beta).mean()
-    # pt_loss = (pt_loss - entropy * self.beta).mean()
-    #
-    # loss_dict = {}
-    # loss_dict['model_loss'] = pg_loss
-    # loss_dict['print_loss'] = float(pt_loss)
-    # loss_dict['reward'] = final_reward
-    # loss_dict['entropy'] = float(entropy.mean())
-    # if self.run_analysis:
-    #     fn = torch.zeros(final_reward.size())
-    #     for i in range(len(final_reward)):
-    #         if not final_reward[i]:
-    #             if int(pred_e2[i]) in self.kg.all_objects[int(e1[i])][int(r[i])]:
-    #                 fn[i] = 1
-    #     loss_dict['fn'] = fn
-    #
-    # return loss_dict
-
-# TODO: Finish this inner training loop.
-# TODO: 1: Assumes you arae happy with batch being passed (meaning you have to check its not too small)
-
 def prep_questions(questions: List[torch.Tensor], model: BertModel):
     embedded_questions = model(questions)
     return embedded_questions
-    
-    
+
+
 def batch_loop(
-    mini_batch: List[torch.Tensor], # Perhaps change this ?
-    grad_norm: float,
-    kg: ITLKnowledgeGraph,
-    navigator: nn.Module,
-    optimizer: torch.optim.Optimizer, # type: ignore
-    pn: GraphSearchPolicy,
-    num_rollout_steps: int,
-) -> Dict[str,Any]:
+    env: ITLGraphEnvironment,
+    mini_batch: pd.DataFrame,  # Perhaps change this ?
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+) -> torch.Tensor:
 
-    # TODO: Decide on the batch metrics.
-    batch_metrics = {
-        "loss": [],
-        "entropy": [],
-    }
+    ########################################
+    # Start the batch loop with zero grad
+    ########################################
+    nav_agent.zero_grad()
 
-    optimizer.zero_grad()
+    # Deconstruct the batch
+    questions = mini_batch['question'].tolist()
+    answers = mini_batch['answer'].tolist()
+    question_embeddings = env.get_llm_embeddings(questions)
+    answer_ids_padded_tensor = collate_token_ids_batch(answers).to(torch.int32)
 
-    # TODO: Prep the questions here
-    questions_embeddings = prep_questions(torch.Tensor(mini_batch))
+    log_probs, rewards = rollout(
+        steps_in_episode,
+        nav_agent,
+        hunch_llm,
+        env,
+        question_embeddings,
+        answer_ids_padded_tensor,
+    )
 
-    # TODO: Run the simulation here
-    experience = rollout(kg, num_rollout_steps, pn, navigator, questions, False)
+    ########################################
+    # Calculate Reinforce Objective
+    ########################################
+    # Compute policy gradient
+    num_steps = len(log_probs)
+    rewards_t = torch.stack(rewards).sum(dim=1)
+    log_probs_t = torch.stack(log_probs).sum(dim=1)
 
-    # TODO: Then we can call the loss in hindsight on the simulation performance.
-    # loss = losses_fn(mini_batch)
-    # loss['model_loss'].backward()
-    # if grad_norm > 0:
-    #     clip_grad_norm_(model.parameters(), grad_norm)
+    pg_loss = -1*rewards_t * log_probs_t
 
-    optimizer.step()
-
-    batch_metrics["loss"].append(loss['print_loss'])
-    if 'entropy' in loss:
-        batch_metrics["entropy"].append(loss['entropy'])
-
-
-    # TODO: Need to figure out what `run_analysis` is doing and whether we want it
-    # TOREM: If unecessary
-    # if self.run_analysis:
-    #     if rewards is None:
-    #         rewards = loss['reward']
-    #     else:
-    #         rewards = torch.cat([rewards, loss['reward']])
-    #     if fns is None:
-    #         fns = loss['fn']
-    #     else:
-    #         fns = torch.cat([fns, loss['fn']])
-    return batch_metrics
+    return pg_loss
 
 
 def train_multihopkg(
     batch_size: int,
     epochs: int,
-    nav_agent: nn.Module,
-    grad_norm: float,
-    kg: ITLKnowledgeGraph,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
     learning_rate: float,
-    num_rollout_steps: int,
-    pn: GraphSearchPolicy,
+    steps_in_episode: int,
+    env: ITLGraphEnvironment,
     start_epoch: int,
-    train_data: List[torch.Tensor],
+    train_data: pd.DataFrame,
 ):
-
-    print("We got to multihopkg training")
-    exit()
+    # TODO: Get the rollout working
 
     # Print Model Parameters + Perhaps some more information
-    print('Model Parameters')
-    print('--------------------------')
+    print(
+        "--------------------------\n"
+    "Model Parameters\n"
+    "--------------------------"
+    )
     for name, param in nav_agent.named_parameters():
-        print(name, param.numel(), 'requires_grad={}'.format(param.requires_grad))
+        print(name, param.numel(), "requires_grad={}".format(param.requires_grad))
 
-    # Just use Adam Optimizer by defailt
-    optimizer = torch.optim.Adam( # type: ignore
+    # Just use Adam Optimizer by default
+    optimizer = torch.optim.Adam(  # type: ignore
         filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
-    ) 
+    )
 
-    #TODO: Metrics to track
-    metrics_to_track = {'loss', 'entropy'}
     for epoch_id in range(start_epoch, epochs):
-        logger.info('Epoch {}'.format(epoch_id))
-
+        logger.info("Epoch {}".format(epoch_id))
         # TODO: Perhaps evaluate the epochs?
 
         # Set in training mode
         nav_agent.train()
-    
+
         # TOREM: Perhapas no need for this shuffle.
-        # random.shuffle(train_data)
-        batch_losses = []
+        batch_rewards = []
         entropies = []
 
         # TODO: Understand if this is actually necessary here
@@ -282,22 +147,21 @@ def train_multihopkg(
         ##############################
         # TODO: update the parameters.
         for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
-            mini_batch = train_data[sample_offset_idx:sample_offset_idx + batch_size]
-            batch_metrics = batch_loop(
-                mini_batch,
-                grad_norm,
-                kg,
-                nav_agent,
-                optimizer,
-                pn,
-                num_rollout_steps
+            mini_batch = train_data[sample_offset_idx : sample_offset_idx + batch_size]
+            assert isinstance(mini_batch, pd.DataFrame) # For the lsp to give me a break
+            optimizer.zero_grad()
+            reinforce_terms = batch_loop(
+                 env, mini_batch, nav_agent, hunch_llm, steps_in_episode
             )
+            reinforce_terms_mean = reinforce_terms.mean()
+            batch_rewards.append(reinforce_terms_mean.item())
+            reinforce_terms_mean.backward()
+
+
+            optimizer.step()
 
             # TODO: Do something with the mini batch
-
         # TODO: Check on the metrics:
-
-        # TODO: (?) This is analysis. We might not need it.
         # Check training statistics
         # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
         # if entropies:
@@ -328,7 +192,7 @@ def train_multihopkg(
         #         eta = self.action_dropout_anneal_interval
         #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
         #             old_action_dropout_rate = self.action_dropout_rate
-        #             self.action_dropout_rate *= self.action_dropout_anneal_factor 
+        #             self.action_dropout_rate *= self.action_dropout_anneal_factor
         #             print('Decreasing action dropout rate: {} -> {}'.format(
         #                 old_action_dropout_rate, self.action_dropout_rate))
         #     # Save checkpoint
@@ -368,22 +232,45 @@ def train_multihopkg(
         #
         #
 
+
 def initialize_path(questions: torch.Tensor):
     # Questions must be turned into queries
     raise NotImplementedError
-    
+
+
+def calculate_reward(hunch_llm: nn.Module, obtained_state: torch.Tensor, answers_ids: torch.Tensor) -> torch.Tensor:
+    """
+    Will take the answers and give an idea of how close we were.
+    This will of course require us to have a language model that will start giving us the  answer.
+    """
+    batch_size = answers_ids.size(0)
+    seq_max_len = answers_ids.size(1)
+
+    # From the obtained_state we will try to find an answer
+    answers_inf_softmax = hunch_llm(obtained_state, answers_ids)
+    # Get indices of the max value of the final output
+    answers_inf_ids = torch.argmax(answers_inf_softmax, dim=-1)
+    answers_inf_embeddings = hunch_llm.decoder_embedding(answers_inf_ids.unsqueeze(1)).reshape(batch_size, seq_max_len, -1)
+    # attempt_at_answer.shape = (batch_size, seq_len, vocab_size)
+
+    # Compare with the correct answer
+    answers_embeddings = hunch_llm.decoder_embedding(answers_ids)
+    answer_scores = torch.nn.functional.cosine_similarity(answers_inf_embeddings, answers_embeddings, dim=-1)
+    answer_score = answer_scores.mean(-1)
+
+    return answer_score
 
 def rollout(
     # TODO: self.mdl should point to (policy network)
-    kg: ITLKnowledgeGraph,
-    num_steps,
-    navigator_agent: ContinuousPolicyGradient,
-    graphman: ITLGraphEnvironment,
-    questions: torch.Tensor, 
-    visualize_action_probs=False,
-):
+    steps_in_episode,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    env: ITLGraphEnvironment,
+    questions_embeddings: torch.Tensor,
+    answers_ids: torch.Tensor,
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]: 
     """
-    Will execute rollouts in parallel.
+    Will execute RL episode rollouts in parallel.
     args:
         kg: Knowledge graph environment.
         num_steps: Number of rollout steps.
@@ -391,80 +278,98 @@ def rollout(
         graphman: Graph search policy network.
         questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
         visualize_action_probs: If set, save action probabilities for visualization.
+    returns: 
+        - log_action_probs: 
+        - action_entropy: 
+        - path_trace: 
+        - path_components:
     """
-        
-    assert (num_steps > 0)
 
-    # Initialization
-    # TOREM: Figure out how to get the dimension of the relationships and embeddings 
-    entity_shape = create_placeholder(torch.Tensor, "entity_shape","mlm_training.py::rollout()")
+    assert steps_in_episode > 0
 
-    # These are all very reinforcement-learning things
+    ########################################
+    # Prepare lists to be returned
+    ########################################
     log_action_probs = []
-    action_entropy = []
+    rewards = []
 
     # Dummy nodes ? TODO: Figur eout what they do.
     # TODO: Perhaps here we can enter through the centroid.
     # For now we still with these dummy
-    r_s = int_fill_var_cuda(entity_shape, kg.dummy_start_r)
     # NOTE: We repeat these entities until we get the right shape:
     # TODO: make sure we keep all seen nodes up to date
-    seen_nodes = int_fill_var_cuda(entity_shape, kg.dummy_e).unsqueeze(1)
-    path_components = []
 
-    # Save some history
-    # path_trace = [(r_s, e_s)]
-    path_trace = [(graphman.get_centroid())] # We can just change it to be different places we end up at.
-    # NOTE:(LG): Must be run as `.reset()` for ensuring environment `pn` is stup
+    # Get initial observation. A concatenation of centroid and question atm. Passed through the path encoder
+    observations = env.reset(questions_embeddings)
+    cur_position, cur_state = observations.position, observations.state
+    # Should be of shape (batch_size, 1, hidden_dim)
 
-    # TODO: initialize the path. However tha tmay be
-    # Something along these lines is what the initial path should look like for us.
-    initial_path = [(graphman.get_centroid(), questions)]
     # pn.initialize_path(kg) # TOREM: Unecessasry to ask pn to form it for us.
-    for t in range(num_steps):
-        
-        # I Dont think changing this is necessary
-        last_r, e = path_trace[-1]
+    states_so_far = []
+    for t in range(steps_in_episode):
 
-        # Ask the navigator to navigate
-        navigator_agent()
+        # Ask the navigator to navigate, agent is presented state, not position
+        # State is meant to summrized path history.
+        sampled_actions, log_probs, entropies  = nav_agent(cur_state)
+
+        # TODO:Make sure we are gettign rewards from the environment.
+        observations = env.step(sampled_actions)
+
+        # For now, we use states given by the path encoder and positions mostly for debugging
+        positions, states = (observations.position, observations.state)
+        states_so_far.append(states)
+
+        ########################################
+        # Calculate the Reward
+        ########################################
+        stacked_states = torch.stack(states_so_far).permute(1,0,2)
+        similarity_scores = calculate_reward(hunch_llm, stacked_states, answers_ids)
+        rewards.append(similarity_scores)
 
         # TODO: Make obseervations not rely on the question
-        cur_obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
 
-        # Our observations are composed simply of the places that we end up in. Perhaps the closest embedding that we find using something like ANN
+        ########################################
+        # Log Stuff for across batch
+        ########################################
+        log_action_probs.append(log_probs)
 
-
-        # TODO: (Mega): Oh yeah this is where we are getting all the shapes contorted and such.
-        # Frankly, I think this is unecessary since we dont need to query available action spaces but rather just sample it
-        # db_outcomes, inv_offset, policy_entropy = pn.transit(
-        #     e, obs, kg
-        # )
-
-        sample_outcome = navigator_agent.sample_action(db_outcomes, inv_offset)
-        action = sample_outcome['action_sample']
         # pn.update_path(action, kg) # TODO: Confirm this is actually needed
-        action_prob = sample_outcome['action_prob']
-        # log_action_probs.append(ops.safe_log(action_prob)) # TODO: Compute this again ( if necessary) 
+        # action_prob = sample_outcome["action_prob"]
+        # log_action_probs.append(ops.safe_log(action_prob)) # TODO: Compute this again ( if necessary)
         # action_entropy.append(policy_entropy) # TOREM: Comes from `transit` not sure if I shoudl remove it
-        seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
-        path_trace.append(action)
+        # TODO: Calculate next cur_observation
+        
+        # TODO: Is this somethign we want?
+        # if visualize_action_probs:
+        #     top_k_action = sample_outcome["top_actions"]
+        #     top_k_action_prob = sample_outcome["top_action_probs"]
+        #     path_components.append((e, top_k_action, top_k_action_prob))
+        
+    return log_action_probs, rewards
 
-        if visualize_action_probs:
-            top_k_action = sample_outcome['top_actions']
-            top_k_action_prob = sample_outcome['top_action_probs']
-            path_components.append((e, top_k_action, top_k_action_prob))
-
-    pred_e2 = path_trace[-1][1]
-    self.record_path_trace(path_trace)
-
-    return {
-        'pred_e2': pred_e2,
-        'log_action_probs': log_action_probs,
-        'action_entropy': action_entropy,
-        'path_trace': path_trace,
-        'path_components': path_components
-    }
+def load_qa_data(cached_metadata_path: str, raw_QAData_path, tokenizer_name: str):
+    if os.path.exists(cached_metadata_path):
+        logger.info(
+            f"\033[93m Found cache for the QA data {cached_metadata_path} will load it instead of working on {raw_QAData_path}. \033[0m"
+        )
+        # Read the first line of the raw csv to count the number of columns
+        train_metadata = json.load(open(cached_metadata_path))
+        cached_csv_data_path = train_metadata["saved_path"]
+        train_df = pd.read_parquet(cached_csv_data_path)
+        # Ensure that we are not reading them integers as strings, but also not as floats
+        logger.info(f"Loaded cached data from \033[93m\033[4m{json.dumps(cached_metadata_path,indent=4)} \033[0m")
+    else:
+        logger.info(
+            f"\033[93m Did not find cache for the QA data {cached_metadata_path}. Will now process it from {raw_QAData_path} \033[0m"
+        )
+        text_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        train_df, train_metadata = data_utils.process_qa_data( #TOREM: Same here, might want to remove if not really used
+            raw_QAData_path,
+            cached_metadata_path,
+            text_tokenizer,
+        )
+        logger.info(f"Done. Result dumped at : \n\033[93m\033[4m{train_metadata['saved_path']}\033[0m")
+    return train_df, train_metadata
 
 def main():
     # By default we run the config
@@ -475,121 +380,129 @@ def main():
     # initialize_model_directory(args, args.seed)
 
     ## Agent needs a Knowledge graph as well as the environment
+    logger.info(":: Setting up the knowledge graph")
     knowledge_graph = ITLKnowledgeGraph(
         data_dir=args.data_dir,
         model=args.model,
         emb_dropout_rate=args.emb_dropout_rate,
         use_action_space_bucketing=args.use_action_space_bucketing,
-        relation_only=args.relation_only,
         pretrained_embedding_type=args.pretrained_embedding_type,
         pretrained_embedding_weights_path=args.pretrained_embedding_weights_path,
     )
 
     # Information computed by knowldege graph for future dependency injection
-    entity_dim = knowledge_graph.get_entity_dim()
-    relation_dim = knowledge_graph.get_relation_dim()
+    dim_entity = knowledge_graph.get_entity_dim()
+    dim_relation = knowledge_graph.get_relation_dim()
     logger.info("You have reached the exit")
 
+    # Get the Module for Approximate Nearest Neighbor Search
+    ########################################
+    # Setup the ann index. 
+    # Will be needed for obtaining observations.
+    ########################################
+    logger.info(":: Setting up the ANN Index") 
+    ann_index_manager = ANN_IndexMan(
+        knowledge_graph.get_all_entity_embeddings_wo_dropout(),
+        exact_computation=False,
+        nlist=100,
+    )
+
+    # Setup the pretrained language model
+    logger.info(":: Setting up the pretrained language model")
+    config = BartConfig.from_pretrained("facebook/bart-base")
+    # Access the hidden size (hidden dimension)
+    bart_padding_token_id = config.pad_token_id
+    # TODO: Remove the hardcode. Perhaps 
+    embedding_hidden_size = config.d_model
+    embedding_vocab_size = config.vocab_size
+    print(f"The hidden dimension of the embedding layer is {embedding_hidden_size} and its vocab size is {embedding_vocab_size}") 
+    hunch_llm = HunchLLM(
+        pretrained_transformer_weights_path = args.pretrained_llm_transformer_ckpnt_path,
+        xattn_left_dim = args.history_dim,
+        llm_model_dim = args.llm_model_dim,
+        llm_num_heads = args.llm_num_heads,
+        llm_num_layers = args.llm_num_layers,
+        llm_ff_dim = args.llm_ff_dim,
+        llm_max_seq_length = args.max_seq_length,
+        xattn_left_max_seq_length = args.steps_in_episode,
+        dropout = args.llm_dropout_rate,
+        embedding_padding_id = bart_padding_token_id,
+        embedding_dim = embedding_hidden_size,
+        embedding_vocab_size = embedding_vocab_size,
+    )
+    if args.further_train_hunchs_llm:
+        # TODO: Ensure we dont have to freeze the model for this.
+        hunch_llm.freeze_llm()
+
+    # Setup the entity embedding module
+    question_embedding_module = AutoModel.from_pretrained(args.question_embedding_model)
     # Setting up the models
-    logger.info(":: (1/3) Loaded embedding model")
+    logger.info(":: Setting up the environment")
     env = ITLGraphEnvironment(
-        entity_dim=entity_dim,
+        question_embedding_module=question_embedding_module,
+        question_embedding_module_trainable=args.question_embedding_module_trainable,
+        entity_dim=dim_entity,
         ff_dropout_rate=args.ff_dropout_rate,
         history_dim=args.history_dim,
         history_num_layers=args.history_num_layers,
         knowledge_graph=knowledge_graph,
-        relation_dim=relation_dim,
-        relation_only=args.relation_only,
-        relation_only_in_path=args.relation_only_in_path,
-        xavier_initialization=args.xavier_initialization,
+        relation_dim=dim_relation,
+        ann_index_manager=ann_index_manager,
+        steps_in_episode=args.num_rollout_steps
     )
-    logger.info(":: (2/3) Loaded environment module")
 
+    # Now we load this from the embedding models
 
+    # TODO: Reorganizew the parameters lol
+    logger.info(":: Setting up the navigation agent")
     nav_agent = ContinuousPolicyGradient(
-        args.num_rollouts,
-        args.baseline,
-        args.beta,
-        args.gamma,
-        args.action_dropout_rate,
-        args.action_dropout_anneal_factor,
-        args.action_dropout_anneal_interval,
-        args.beam_size,
-        knowledge_graph,
-        env, # What you just created above
-        args.num_rollout_steps,
-        # args.beam_size,
-        # knowledge_graph,
-        # env,  # What you just created above
-        # args.model_dir,
-        # args.model,
-        # args.data_dir,
-        # args.batch_size,
-        # args.train_batch_size,
-        # args.dev_batch_size,
-        # args.start_epoch,
-        # args.num_epochs,
-        # args.num_wait_epochs,
-        # args.num_peek_epochs,
-        # args.learning_rate,
-        # args.grad_norm,
-        # args.adam_beta1,
-        # args.adam_beta2,
-        # args.train,
-        # args.run_analysis,
-        # args.embedding_weights_path,
+        baseline=args.baseline,
+        beta=args.beta,
+        gamma=args.gamma,
+        action_dropout_rate=args.action_dropout_rate,
+        action_dropout_anneal_factor=args.action_dropout_anneal_factor,
+        action_dropout_anneal_interval=args.action_dropout_anneal_interval,
+        num_rollout_steps=args.num_rollout_steps,
+        dim_action=dim_relation,
+        dim_hidden=args.rnn_hidden,
+        dim_observation=args.history_dim, # observation will be into history
     )
 
 
+    # TODO: Add checkpoint support
+    # See args.start_epoch
 
-    logger.info(":: (3/3) Loaded navigation agent")
-    logger.info(":: Training the model")
-
-
-    # TODO: Add checkpoint support:
-    start_epoch = 0
-
-    ######## ######## ########
-    # Train:
-    ######## ######## ########
-    entity_index_path = os.path.join(args.data_dir, "entity2id.txt")
-    relation_index_path = os.path.join(args.data_dir, "relation2id.txt")
-
-    text_tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-
-    train_data, metadata = data_utils.process_qa_data(
-        args.raw_QAPathData_path,
-        args.cached_QAPathData_path,
-        text_tokenizer,
-    )
-    list_train_data = list(train_data.values)
-    
+    ########################################
+    # Get the data
+    ########################################
+    logger.info(":: Setting up the data")
+    train_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
 
     # TODO: Load the validation data
     # dev_path = os.path.join(args.data_dir, "dev.triples")
     # dev_data = data_utils.load_triples(
     #     dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
     # )
-
-
     # TODO: Make it take check for a checkpoint and decide what start_epoch
     # if args.checkpoint_path is not None:
     #     # TODO: Add it here to load the checkpoint separetely
     #     nav_agent.load_checkpoint(args.checkpoint_path)
-    start_epoch = 0
-    dev_data = None
 
+    ######## ######## ########
+    # Train:
+    ######## ######## ########
+    start_epoch = 0
+    logger.info(":: Training the model")
     train_multihopkg(
-        args.batch_size,
-        args.epochs,
-        nav_agent,
-        args.grad_norm,
-        knowledge_graph,
-        args.learning_rate,
-        args.num_rollout_steps,
-        args.start_epoch,
-        start_epoch,
-        list_train_data,
+        batch_size = args.batch_size,
+        epochs = args.epochs,
+        nav_agent = nav_agent,
+        hunch_llm = hunch_llm,
+        learning_rate = args.learning_rate,
+        steps_in_episode = args.num_rollout_steps,
+        env = env, 
+        start_epoch = args.start_epoch,
+        train_data = train_df
     )
 
     # TODO: Evaluation of the model

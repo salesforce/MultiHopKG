@@ -15,6 +15,7 @@ pandas = "^2.2.3"
 torch = {version = "^2.4.1+cu121", source = "pytorch_gpu"}
 scikit-learn = "^1.5.2"
 pyarrow = "^18.0.0"
+faiss-cpu = "1.9.0"
 
 
 [[tool.poetry.source]]

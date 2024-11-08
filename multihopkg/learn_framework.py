@@ -23,6 +23,7 @@ from transformers.models.idefics.processing_idefics import incremental_to_binary
 import multihopkg.eval
 from multihopkg.knowledge_graph import KnowledgeGraph
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
+from multihopkg.rl.graph_search.pn import GraphSearchPolicy, ITLGraphEnvironment
 import multihopkg.utils.ops as ops
 
 
@@ -46,7 +47,7 @@ class LFramework(nn.Module):
         # train: bool,
         run_analysis: bool,
         kg: KnowledgeGraph,
-        mdl, # NOTE: TF is this ?
+        mdl: GraphSearchPolicy, # NOTE: TF is this ?
     ):
 
         super(LFramework, self).__init__()
@@ -71,6 +72,7 @@ class LFramework(nn.Module):
         # self.inference = not train
         self.run_analysis = run_analysis
 
+        # THESE TWO are modules and they are perhaps what is being propagated againsgt. I have no idea.
         self.kg = kg
         self.mdl = mdl
         print("{} module created".format(self.model))
@@ -148,6 +150,7 @@ class LFramework(nn.Module):
                         fns = loss['fn']
                     else:
                         fns = torch.cat([fns, loss['fn']])
+
             # Check training statistics
             stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
             if entropies:

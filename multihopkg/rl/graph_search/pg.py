@@ -17,19 +17,12 @@ from multihopkg.rl.graph_search.pn import GraphSearchPolicy
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import int_fill_var_cuda, var_cuda, zeros_var_cuda
 from transformers import BertTokenizer, BertModel
-from torch import nn
 
 
 # TOREM: I dont really think we need the Lfraework
 # class ContinuousPolicyGradient(LFramework):
-class ContinuousPolicyGradient(nn.Module):
-    def __init__(self):
-        # TODOHow we train 
 
-        raise NotImplementedError("`ContinuousPolicyGradient` not yet implemented.")
 
-    def sample_action(self, ):
-        raise NotImplementedError
 
 class PolicyGradient(LFramework):
     def __init__(
@@ -113,29 +106,33 @@ class PolicyGradient(LFramework):
         return (pred_e2 == e2).float()
 
     def loss(self, mini_batch):
-        
+
         def stablize_reward(r):
             r_2D = r.view(-1, self.num_rollouts)
-            if self.baseline == 'avg_reward':
+            if self.baseline == "avg_reward":
                 stabled_r_2D = r_2D - r_2D.mean(dim=1, keepdim=True)
-            elif self.baseline == 'avg_reward_normalized':
-                stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (r_2D.std(dim=1, keepdim=True) + ops.EPSILON)
+            elif self.baseline == "avg_reward_normalized":
+                stabled_r_2D = (r_2D - r_2D.mean(dim=1, keepdim=True)) / (
+                    r_2D.std(dim=1, keepdim=True) + ops.EPSILON
+                )
             else:
-                raise ValueError('Unrecognized baseline function: {}'.format(self.baseline))
+                raise ValueError(
+                    "Unrecognized baseline function: {}".format(self.baseline)
+                )
             stabled_r = stabled_r_2D.view(-1)
             return stabled_r
-    
+
         e1, e2, r = self.format_batch(mini_batch, num_tiles=self.num_rollouts)
         output = self.rollout(e1, r, e2, num_steps=self.num_rollout_steps)
 
         # Compute policy gradient loss
-        pred_e2 = output['pred_e2']
-        log_action_probs = output['log_action_probs']
-        action_entropy = output['action_entropy']
+        pred_e2 = output["pred_e2"]
+        log_action_probs = output["log_action_probs"]
+        action_entropy = output["action_entropy"]
 
         # Compute discounted reward
         final_reward = self.reward_fun(e1, r, e2, pred_e2)
-        if self.baseline != 'n/a':
+        if self.baseline != "n/a":
             final_reward = stablize_reward(final_reward)
         cum_discounted_rewards = [0] * self.num_rollout_steps
         cum_discounted_rewards[-1] = final_reward
@@ -157,17 +154,17 @@ class PolicyGradient(LFramework):
         pt_loss = (pt_loss - entropy * self.beta).mean()
 
         loss_dict = {}
-        loss_dict['model_loss'] = pg_loss
-        loss_dict['print_loss'] = float(pt_loss)
-        loss_dict['reward'] = final_reward
-        loss_dict['entropy'] = float(entropy.mean())
+        loss_dict["model_loss"] = pg_loss
+        loss_dict["print_loss"] = float(pt_loss)
+        loss_dict["reward"] = final_reward
+        loss_dict["entropy"] = float(entropy.mean())
         if self.run_analysis:
             fn = torch.zeros(final_reward.size())
             for i in range(len(final_reward)):
                 if not final_reward[i]:
                     if int(pred_e2[i]) in self.kg.all_objects[int(e1[i])][int(r[i])]:
                         fn[i] = 1
-            loss_dict['fn'] = fn
+            loss_dict["fn"] = fn
 
         return loss_dict
 
@@ -187,7 +184,7 @@ class PolicyGradient(LFramework):
         :return log_path_prob: Log probability of the sampled path.
         :return action_entropy: Entropy regularization term.
         """
-        assert (num_steps > 0)
+        assert num_steps > 0
         kg, pn = self.kg, self.mdl
 
         # Initialization
@@ -211,32 +208,33 @@ class PolicyGradient(LFramework):
 
         for t in range(num_steps):
             last_r, e = path_trace[-1]
-            obs = [e_s, q, e_t, t==(num_steps-1), last_r, seen_nodes]
+            obs = [e_s, q, e_t, t == (num_steps - 1), last_r, seen_nodes]
             db_outcomes, inv_offset, policy_entropy = pn.transit(
-                e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing)
+                e, obs, kg, use_action_space_bucketing=self.use_action_space_bucketing
+            )
             sample_outcome = self.sample_action(db_outcomes, inv_offset)
-            action = sample_outcome['action_sample']
+            action = sample_outcome["action_sample"]
             pn.update_path(action, kg)
-            action_prob = sample_outcome['action_prob']
+            action_prob = sample_outcome["action_prob"]
             log_action_probs.append(ops.safe_log(action_prob))
             action_entropy.append(policy_entropy)
             seen_nodes = torch.cat([seen_nodes, e.unsqueeze(1)], dim=1)
             path_trace.append(action)
 
             if visualize_action_probs:
-                top_k_action = sample_outcome['top_actions']
-                top_k_action_prob = sample_outcome['top_action_probs']
+                top_k_action = sample_outcome["top_actions"]
+                top_k_action_prob = sample_outcome["top_action_probs"]
                 path_components.append((e, top_k_action, top_k_action_prob))
 
         pred_e2 = path_trace[-1][1]
         self.record_path_trace(path_trace)
 
         return {
-            'pred_e2': pred_e2,
-            'log_action_probs': log_action_probs,
-            'action_entropy': action_entropy,
-            'path_trace': path_trace,
-            'path_components': path_components
+            "pred_e2": pred_e2,
+            "log_action_probs": log_action_probs,
+            "action_entropy": action_entropy,
+            "path_trace": path_trace,
+            "path_components": path_components,
         }
 
     def sample_action(self, db_outcomes, inv_offset=None):
@@ -261,8 +259,10 @@ class PolicyGradient(LFramework):
                 # There is a small chance that that action_keep_mask is accidentally set to zero.
                 # When this happen, we take a random sample from the available actions.
                 # sample_action_dist = action_dist * (action_keep_mask + ops.EPSILON)
-                sample_action_dist = \
-                    action_dist * action_keep_mask + ops.EPSILON * (1 - action_keep_mask) * action_mask
+                sample_action_dist = (
+                    action_dist * action_keep_mask
+                    + ops.EPSILON * (1 - action_keep_mask) * action_mask
+                )
                 return sample_action_dist
             else:
                 return action_dist
@@ -318,17 +318,17 @@ class PolicyGradient(LFramework):
             action_prob_list = []
             for action_space, action_dist in db_outcomes:
                 sample_outcome = sample(action_space, action_dist)
-                next_r_list.append(sample_outcome['action_sample'][0])
-                next_e_list.append(sample_outcome['action_sample'][1])
-                action_prob_list.append(sample_outcome['action_prob'])
+                next_r_list.append(sample_outcome["action_sample"][0])
+                next_e_list.append(sample_outcome["action_sample"][1])
+                action_prob_list.append(sample_outcome["action_prob"])
                 action_dist_list.append(action_dist)
             next_r = torch.cat(next_r_list, dim=0)[inv_offset]
             next_e = torch.cat(next_e_list, dim=0)[inv_offset]
             action_sample = (next_r, next_e)
             action_prob = torch.cat(action_prob_list, dim=0)[inv_offset]
             sample_outcome = {}
-            sample_outcome['action_sample'] = action_sample
-            sample_outcome['action_prob'] = action_prob
+            sample_outcome["action_sample"] = action_sample
+            sample_outcome["action_prob"] = action_prob
         else:
             sample_outcome = sample(db_outcomes[0][0], db_outcomes[0][1])
 
@@ -338,12 +338,13 @@ class PolicyGradient(LFramework):
         kg, pn = self.kg, self.mdl
         e1, e2, r = self.format_batch(mini_batch)
         beam_search_output = search.beam_search(
-            pn, e1, r, e2, kg, self.num_rollout_steps, self.beam_size)
-        pred_e2s = beam_search_output['pred_e2s']
-        pred_e2_scores = beam_search_output['pred_e2_scores']
+            pn, e1, r, e2, kg, self.num_rollout_steps, self.beam_size
+        )
+        pred_e2s = beam_search_output["pred_e2s"]
+        pred_e2_scores = beam_search_output["pred_e2_scores"]
         if verbose:
             # print inference paths
-            search_traces = beam_search_output['search_traces']
+            search_traces = beam_search_output["search_traces"]
             output_beam_size = min(self.beam_size, pred_e2_scores.shape[1])
             for i in range(len(e1)):
                 for j in range(output_beam_size):
@@ -352,9 +353,19 @@ class PolicyGradient(LFramework):
                         break
                     search_trace = []
                     for k in range(len(search_traces)):
-                        search_trace.append((int(search_traces[k][0][ind]), int(search_traces[k][1][ind])))
-                    print('beam {}: score = {} \n<PATH> {}'.format(
-                        j, float(pred_e2_scores[i][j]), ops.format_path(search_trace, kg)))
+                        search_trace.append(
+                            (
+                                int(search_traces[k][0][ind]),
+                                int(search_traces[k][1][ind]),
+                            )
+                        )
+                    print(
+                        "beam {}: score = {} \n<PATH> {}".format(
+                            j,
+                            float(pred_e2_scores[i][j]),
+                            ops.format_path(search_trace, kg),
+                        )
+                    )
         with torch.no_grad():
             pred_scores = zeros_var_cuda([len(e1), kg.num_entities])
             for i in range(len(e1)):

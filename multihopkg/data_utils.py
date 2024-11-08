@@ -559,7 +559,6 @@ def process_qa_data(
     ## Prepare the language data
     qna = qna.map(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
     specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
-    pdb.set_trace()
 
     repo_root = get_git_root()
     if repo_root is None:

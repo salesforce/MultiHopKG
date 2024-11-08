@@ -72,8 +72,7 @@ class KnowledgeGraph(nn.Module):
         self.all_subject_vectors = None
         self.all_object_vectors = None
 
-
-        print('** Create {} knowledge graph **'.format(model))
+        print("** Create {} knowledge graph **".format(model))
         self.load_graph_data(data_dir)
         self.load_all_answers(data_dir)
         self.data_dir = data_dir
@@ -93,27 +92,31 @@ class KnowledgeGraph(nn.Module):
         self.relation_img_embeddings = None
         self.EDropout = None
         self.RDropout = None
-        
+
         self.define_modules()
         self.initialize_modules()
 
     def load_graph_data(self, data_dir):
         # Load indices
         # QUESTION:  Whrere do we get this entity2id.txt from ?
-        self.entity2id, self.id2entity = load_index(os.path.join(data_dir, 'entity2id.txt'))
-        print('Sanity check: {} entities loaded'.format(len(self.entity2id)))
-        self.type2id, self.id2type = load_index(os.path.join(data_dir, 'type2id.txt'))
-        print('Sanity check: {} types loaded'.format(len(self.type2id)))
-        with open(os.path.join(data_dir, 'entity2typeid.pkl'), 'rb') as f:
+        self.entity2id, self.id2entity = load_index(
+            os.path.join(data_dir, "entity2id.txt")
+        )
+        print("Sanity check: {} entities loaded".format(len(self.entity2id)))
+        self.type2id, self.id2type = load_index(os.path.join(data_dir, "type2id.txt"))
+        print("Sanity check: {} types loaded".format(len(self.type2id)))
+        with open(os.path.join(data_dir, "entity2typeid.pkl"), "rb") as f:
             self.entity2typeid = pickle.load(f)
-        self.relation2id, self.id2relation = load_index(os.path.join(data_dir, 'relation2id.txt'))
-        print('Sanity check: {} relations loaded'.format(len(self.relation2id)))
-       
+        self.relation2id, self.id2relation = load_index(
+            os.path.join(data_dir, "relation2id.txt")
+        )
+        print("Sanity check: {} relations loaded".format(len(self.relation2id)))
+
         # Load graph structures
-        if self.model.startswith('point'): 
+        if self.model.startswith("point"):
             # Base graph structure used for training and test
-            adj_list_path = os.path.join(data_dir, 'adj_list.pkl')
-            with open(adj_list_path, 'rb') as f:
+            adj_list_path = os.path.join(data_dir, "adj_list.pkl")
+            with open(adj_list_path, "rb") as f:
                 self.adj_list = pickle.load(f)
             self.vectorize_action_space(data_dir)
 
@@ -121,16 +124,17 @@ class KnowledgeGraph(nn.Module):
         """
         Pre-process and numericalize the knowledge graph structure.
         """
+
         def load_page_rank_scores(input_path):
             pgrk_scores = collections.defaultdict(float)
             with open(input_path) as f:
                 for line in f:
-                    e, score = line.strip().split(':')
+                    e, score = line.strip().split(":")
                     e_id = self.entity2id[e.strip()]
                     score = float(score)
                     pgrk_scores[e_id] = score
             return pgrk_scores
-                    
+
         # Sanity check
         num_facts = 0
         out_degrees = collections.defaultdict(int)
@@ -139,11 +143,11 @@ class KnowledgeGraph(nn.Module):
                 num_facts += len(self.adj_list[e1][r])
                 out_degrees[e1] += len(self.adj_list[e1][r])
         print("Sanity check: maximum out degree: {}".format(max(out_degrees.values())))
-        print('Sanity check: {} facts in knowledge graph'.format(num_facts))
+        print("Sanity check: {} facts in knowledge graph".format(num_facts))
 
         # load page rank scores
-        page_rank_scores = load_page_rank_scores(os.path.join(data_dir, 'raw.pgrk'))
-        
+        page_rank_scores = load_page_rank_scores(os.path.join(data_dir, "raw.pgrk"))
+
         def get_action_space(e1):
             action_space = []
             if e1 in self.adj_list:
@@ -153,9 +157,10 @@ class KnowledgeGraph(nn.Module):
                         action_space.append((r, e2))
                 if len(action_space) + 1 >= self.bandwidth:
                     # Base graph pruning
-                    sorted_action_space = \
-                        sorted(action_space, key=lambda x: page_rank_scores[x[1]], reverse=True)
-                    action_space = sorted_action_space[:self.bandwidth]
+                    sorted_action_space = sorted(
+                        action_space, key=lambda x: page_rank_scores[x[1]], reverse=True
+                    )
+                    action_space = sorted_action_space[: self.bandwidth]
             action_space.insert(0, (NO_OP_RELATION_ID, e1))
             return action_space
 
@@ -177,9 +182,13 @@ class KnowledgeGraph(nn.Module):
                     action_mask[i, j] = 1
             return (int_var_cuda(r_space), int_var_cuda(e_space)), var_cuda(action_mask)
 
-        def vectorize_unique_r_space(unique_r_space_list, unique_r_space_size, volatile):
+        def vectorize_unique_r_space(
+            unique_r_space_list, unique_r_space_size, volatile
+        ):
             bucket_size = len(unique_r_space_list)
-            unique_r_space = torch.zeros(bucket_size, unique_r_space_size) + self.dummy_r
+            unique_r_space = (
+                torch.zeros(bucket_size, unique_r_space_size) + self.dummy_r
+            )
             for i, u_r_s in enumerate(unique_r_space_list):
                 for j, r in enumerate(u_r_s):
                     unique_r_space[i, j] = r
@@ -200,12 +209,16 @@ class KnowledgeGraph(nn.Module):
                 self.entity2bucketid[e1, 1] = len(action_space_buckets_discrete[key])
                 action_space_buckets_discrete[key].append(action_space)
                 num_facts_saved_in_action_table += len(action_space)
-            print('Sanity check: {} facts saved in action table'.format(
-                num_facts_saved_in_action_table - self.num_entities))
+            print(
+                "Sanity check: {} facts saved in action table".format(
+                    num_facts_saved_in_action_table - self.num_entities
+                )
+            )
             for key in action_space_buckets_discrete:
-                print('Vectorizing action spaces bucket {}...'.format(key))
+                print("Vectorizing action spaces bucket {}...".format(key))
                 self.action_space_buckets[key] = vectorize_action_space(
-                    action_space_buckets_discrete[key], key * self.bucket_interval)
+                    action_space_buckets_discrete[key], key * self.bucket_interval
+                )
         else:
             action_space_list = []
             max_num_actions = 0
@@ -214,10 +227,12 @@ class KnowledgeGraph(nn.Module):
                 action_space_list.append(action_space)
                 if len(action_space) > max_num_actions:
                     max_num_actions = len(action_space)
-            print('Vectorizing action spaces...')
-            self.action_space = vectorize_action_space(action_space_list, max_num_actions)
-            
-            if self.model.startswith('rule'):
+            print("Vectorizing action spaces...")
+            self.action_space = vectorize_action_space(
+                action_space_list, max_num_actions
+            )
+
+            if self.model.startswith("rule"):
                 unique_r_space_list = []
                 max_num_unique_rs = 0
                 for e1 in sorted(self.adj_list.keys()):
@@ -225,7 +240,9 @@ class KnowledgeGraph(nn.Module):
                     unique_r_space_list.append(unique_r_space)
                     if len(unique_r_space) > max_num_unique_rs:
                         max_num_unique_rs = len(unique_r_space)
-                self.unique_r_space = vectorize_unique_r_space(unique_r_space_list, max_num_unique_rs)
+                self.unique_r_space = vectorize_unique_r_space(
+                    unique_r_space_list, max_num_unique_rs
+                )
 
     def load_all_answers(self, data_dir, add_reversed_edges=False):
         def add_subject(e1, e2, r, d):
@@ -254,24 +271,30 @@ class KnowledgeGraph(nn.Module):
         add_object(self.dummy_e, self.dummy_e, self.dummy_r, train_objects)
         add_object(self.dummy_e, self.dummy_e, self.dummy_r, dev_objects)
         add_object(self.dummy_e, self.dummy_e, self.dummy_r, all_objects)
-        for file_name in ['raw.kb', 'train.triples', 'dev.triples', 'test.triples']:
-            if 'NELL' in self.data_dir and self.test and file_name == 'train.triples':
+        for file_name in ["raw.kb", "train.triples", "dev.triples", "test.triples"]:
+            if "NELL" in self.data_dir and self.test and file_name == "train.triples":
                 continue
             with open(os.path.join(data_dir, file_name)) as f:
                 for line in f:
                     e1, e2, r = line.strip().split()
                     e1, e2, r = self.triple2ids((e1, e2, r))
-                    if file_name in ['raw.kb', 'train.triples']:
+                    if file_name in ["raw.kb", "train.triples"]:
                         add_subject(e1, e2, r, train_subjects)
                         add_object(e1, e2, r, train_objects)
                         if add_reversed_edges:
-                            add_subject(e2, e1, self.get_inv_relation_id(r), train_subjects)
-                            add_object(e2, e1, self.get_inv_relation_id(r), train_objects)
-                    if file_name in ['raw.kb', 'train.triples', 'dev.triples']:
+                            add_subject(
+                                e2, e1, self.get_inv_relation_id(r), train_subjects
+                            )
+                            add_object(
+                                e2, e1, self.get_inv_relation_id(r), train_objects
+                            )
+                    if file_name in ["raw.kb", "train.triples", "dev.triples"]:
                         add_subject(e1, e2, r, dev_subjects)
                         add_object(e1, e2, r, dev_objects)
                         if add_reversed_edges:
-                            add_subject(e2, e1, self.get_inv_relation_id(r), dev_subjects)
+                            add_subject(
+                                e2, e1, self.get_inv_relation_id(r), dev_subjects
+                            )
                             add_object(e2, e1, self.get_inv_relation_id(r), dev_objects)
                     add_subject(e1, e2, r, all_subjects)
                     add_object(e1, e2, r, all_objects)
@@ -284,7 +307,7 @@ class KnowledgeGraph(nn.Module):
         self.dev_objects = dev_objects
         self.all_subjects = all_subjects
         self.all_objects = all_objects
-       
+
         # change the answer set into a variable
         def answers_to_var(d_l):
             d_v = collections.defaultdict(collections.defaultdict)
@@ -293,7 +316,7 @@ class KnowledgeGraph(nn.Module):
                     v = torch.LongTensor(list(d_l[x][y])).unsqueeze(1)
                     d_v[x][y] = int_var_cuda(v)
             return d_v
-        
+
         self.train_subject_vectors = answers_to_var(train_subjects)
         self.train_object_vectors = answers_to_var(train_objects)
         self.dev_subject_vectors = answers_to_var(dev_subjects)
@@ -303,15 +326,15 @@ class KnowledgeGraph(nn.Module):
 
     def load_fuzzy_facts(self):
         # extend current adjacency list with fuzzy facts
-        dev_path = os.path.join(self.data_dir, 'dev.triples')
-        test_path = os.path.join(self.data_dir, 'test.triples')
+        dev_path = os.path.join(self.data_dir, "dev.triples")
+        test_path = os.path.join(self.data_dir, "test.triples")
         with open(dev_path) as f:
             dev_triples = [l.strip() for l in f.readlines()]
         with open(test_path) as f:
             test_triples = [l.strip() for l in f.readlines()]
         removed_triples = set(dev_triples + test_triples)
         theta = 0.5
-        fuzzy_fact_path = os.path.join(self.data_dir, 'train.fuzzy.triples')
+        fuzzy_fact_path = os.path.join(self.data_dir, "train.fuzzy.triples")
         count = 0
         with open(fuzzy_fact_path) as f:
             for line in f:
@@ -428,17 +451,19 @@ class KnowledgeGraph(nn.Module):
     def dummy_start_r(self):
         return START_RELATION_ID
 
+
 class ITLKnowledgeGraph(nn.Module):
     """
-    This one will *not* be used for training embeddings but will rather load them and used them for Navigation.
+    ITLKnowledgeGraph is a environment defined as a knowledge graph that is used *NOT* for training embeddings but rather for navigation.
+    Letting know the user where it is via ANN, and calculating reward based on how close the user gets to the right answer.
     """
+
     def __init__(
         self,
         data_dir: str,
         model: str,
         emb_dropout_rate: float,
         use_action_space_bucketing: bool,
-        relation_only: bool,
         pretrained_embedding_type: str,
         pretrained_embedding_weights_path: str,
     ):
@@ -447,35 +472,16 @@ class ITLKnowledgeGraph(nn.Module):
         self.relation2id, self.id2relation = {}, {}
         self.type2id, self.id2type = {}, {}
         self.entity2typeid = {}
-        self.adj_list = None
-
-        self.action_space = None
-        self.action_space_buckets = None
         self.unique_r_space = None
-        self.relation_only = relation_only
-
-        self.train_subjects = None
-        self.train_objects = None
-        self.dev_subjects = None
-        self.dev_objects = None
-        self.all_subjects = None
-        self.all_objects = None
-        self.train_subject_vectors = None
-        self.train_object_vectors = None
-        self.dev_subject_vectors = None
-        self.dev_object_vectors = None
-        self.all_subject_vectors = None
-        self.all_object_vectors = None
 
         self.logger = setup_logger(__name__)
 
-        print('** Create {} knowledge graph **'.format(model))
+        print("** Create {} knowledge graph **".format(model))
         # TODO: Implement when we find them needed
         # self.load_graph_data(data_dir)
         # self.load_all_answers(data_dir)
         self.data_dir = data_dir
         self.use_action_space_bucketing = use_action_space_bucketing
-        self.relation_only = relation_only
 
         # Define NN Modules
         self.emb_dropout_rate = emb_dropout_rate
@@ -488,11 +494,20 @@ class ITLKnowledgeGraph(nn.Module):
 
         # Ensure that the weights exist otherwise raise an error
         if not os.path.exists(pretrained_embedding_weights_path):
-            raise FileNotFoundError(f"The pretrained embedding weights file {pretrained_embedding_weights_path} does not exist")
-        self.logger.info(f"Loading pretrained embedding weights from {pretrained_embedding_weights_path}")
-        overcomplete_state_dict = torch.load(pretrained_embedding_weights_path)
-        relation_embeddings = overcomplete_state_dict['state_dict']['kg.relation_embeddings.weight']
-        entity_embeddings = overcomplete_state_dict['state_dict']['kg.entity_embeddings.weight']
+            raise FileNotFoundError(
+                f"The pretrained embedding weights file {pretrained_embedding_weights_path} does not exist"
+            )
+
+        self.logger.info(
+            f"Loading pretrained embedding weights from {pretrained_embedding_weights_path}"
+        )
+        trained_embeddings = torch.load(pretrained_embedding_weights_path)
+        relation_embeddings = trained_embeddings["state_dict"][
+            "kg.relation_embeddings.weight"
+        ]
+        entity_embeddings = trained_embeddings["state_dict"][
+            "kg.entity_embeddings.weight"
+        ]
         self.num_entities = entity_embeddings.shape[0]
         self.num_relations = relation_embeddings.shape[0]
         self.logger.info(f"Pretrained weights contain number of entities: {self.num_entities}")
@@ -505,42 +520,55 @@ class ITLKnowledgeGraph(nn.Module):
         # Define the Embeddings
         self.entity_embeddings = None
         self.EDropout = None
-        if not self.relation_only:
-            # This is what matters to us
-            self.entity_embeddings = nn.Embedding(self.num_entities, self.entity_dim)
-            self.EDropout = nn.Dropout(self.emb_dropout_rate)
-        # This happens regardless
+        self.entity_embeddings = nn.Embedding(self.num_entities, self.entity_dim)
+        self.EDropout = nn.Dropout(self.emb_dropout_rate)
         self.relation_embeddings = nn.Embedding(self.num_relations, self.relation_dim)
         self.RDropout = nn.Dropout(self.emb_dropout_rate)
 
-        assert self.entity_embeddings is not None, "No support yet for relation only graphs"
+        assert (
+            self.entity_embeddings is not None
+        ), "No support yet for relation only graphs"
+
+        # TOTWEAK: not sure if centroid is the correct approach but seemed like the first naive idea.
         self.centroid = calculate_entity_centroid(self.entity_embeddings)
-        
+
         # Load the dictionary here.
-        if pretrained_embedding_type in ['conve']:
-            kg_state_dict = dict()
-            for param_name in ['kg.entity_embeddings.weight', 'kg.relation_embeddings.weight']:
-                kg_state_dict[param_name.split('.', 1)[1]] = overcomplete_state_dict['state_dict'][param_name]
-            self.load_state_dict(kg_state_dict)
-            self.logger.info(f"Loaded pretrained embedding weights from {pretrained_embedding_weights_path}")
-        else: 
-            raise NotImplementedError(f"The pretrained embedding type {pretrained_embedding_type} is not implemented")
-        
-        # TODO: If using embedding types other than conve, we need to implement that ourselves
+        # NOTE: If using embedding types other than conve, we need to implement that ourselves
         # See rs_pg.py in that case
-        
+        if pretrained_embedding_type in ["conve"]:
+            kg_state_dict = dict()
+            for param_name in [
+                "kg.entity_embeddings.weight",
+                "kg.relation_embeddings.weight",
+            ]:
+                kg_state_dict[param_name.split(".", 1)[1]] = trained_embeddings[
+                    "state_dict"
+                ][param_name]
+            self.logger.info(
+                f"Loaded pretrained embedding weights from {pretrained_embedding_weights_path}"
+            )
+        else:
+            raise NotImplementedError(
+                f"The pretrained embedding type {pretrained_embedding_type} is not implemented"
+            )
+
     def get_entity_dim(self):
         return self.entity_dim
+
     def get_relation_dim(self):
         return self.relation_dim
-        
+
     def get_centroid(self) -> torch.Tensor:
         return self.centroid
 
+    def get_all_entity_embeddings_wo_dropout(self) -> torch.Tensor:
+        assert self.entity_embeddings is not None # Again, lsp
+        return self.entity_embeddings.weight
 
-    def calculate_centroid(self) -> torch.Tensor:
-        raise NotImplementedError
-        return torch.tensor([])
+
+
+        
+
 
 
 def calculate_entity_centroid(embeddings: nn.Embedding):

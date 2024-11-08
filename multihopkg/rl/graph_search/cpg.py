@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
 from typing import Tuple
+import pdb
 
 
 class ContinuousPolicyGradient(nn.Module):
@@ -14,7 +15,6 @@ class ContinuousPolicyGradient(nn.Module):
     def __init__(
         # TODO: remove all parameters that are irrelevant here
         self,
-        num_rollouts: int,
         baseline: str,
         beta: float,
         gamma: float,
@@ -25,33 +25,10 @@ class ContinuousPolicyGradient(nn.Module):
         dim_action: int,
         dim_hidden: int,
         dim_observation: int,
-        # # Unused Legacy Parameters
-        # observation_dim: int,
-        # beam_size: int,
-        # kg: ITLKnowledgeGraph,
-        # pn: ITLGraphEnvironment,
-        # model_dir: str,
-        # model: str,
-        # data_dir: str,
-        # batch_size: int,
-        # train_batch_size: int,
-        # dev_batch_size: int,
-        # start_epoch: int,
-        # num_epochs: int,
-        # num_wait_epochs: int,
-        # num_peek_epochs: int,
-        # learning_rate: float,
-        # grad_norm: float,
-        # adam_beta1: float,
-        # adam_beta2: float,
-        # train: bool,
-        # run_analysis: bool,
-        # emebedding_weights_path: str,
     ):
         super(ContinuousPolicyGradient, self).__init__()
 
         # Training hyperparameters
-        self.num_rollouts = num_rollouts
         self.num_rollout_steps = num_rollout_steps
         self.baseline = baseline
         self.beta = beta  # entropy regularization parameter
@@ -68,7 +45,7 @@ class ContinuousPolicyGradient(nn.Module):
         # Torch Modules
         ########################################
         self.fc1, self.mu_layer, self.sigma_layer = self._define_modules(
-            input_dim=dim_observation, action_dim=dim_action, hidden_dim=dim_hidden
+            input_dim=dim_observation, observation_dim=dim_action, hidden_dim=dim_hidden
         )
 
         # # Inference hyperparameters
@@ -77,42 +54,45 @@ class ContinuousPolicyGradient(nn.Module):
         # self.path_types = dict()
         # self.num_path_types = 0
 
-    def forward(self, observations: torch.Tensor):
+    def forward(
+        self, observations: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Once we do the observations we need to do the sampling
         return self._sample_action(observations)
 
     def _sample_action(
         self,
         observations: torch.Tensor,
-    ):
-        # TODO: pull nura`s changes here
-        raise NotImplementedError
-
-    def policy_nn_fun(self, X2: torch.Tensor):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Input comes from:
-            X = self.W1(X)
-            X = F.relu(X)
-            X = self.W1Dropout(X)
-            X = self.W2(X)
-            X2 = self.W2Dropout(X)
+        Will sample batch_len actions given batch_len observations
+        args
+            observations: torch.Tensor. Shape: (batch_len, path_encoder_dim)
         """
-
-        mu = self.mu_layer(X2)
-        log_sigma = self.sigma_layer(X2)
-        log_sigma = torch.clamp(log_sigma, min=-20, max=2)
+        projections = self.fc1(observations)
+        mu = self.mu_layer(projections)
+        log_sigma = self.sigma_layer(projections)
+        # log_sigma = torch.clamp(log_sigma, min=-20, max=2) # TODO: Check if this is needed
         sigma = torch.exp(log_sigma)
 
         # Create a normal distribution using the mean and standard deviation
         dist = torch.distributions.Normal(mu, sigma)
-        entropy = dist.entropy().sum(dim=-1)
-        return dist, entropy
+        entropy = dist.entropy().sum(dim=-1)  
 
-    def _define_modules(self, input_dim:int, action_dim: int, hidden_dim: int):
+        # Now Sample from it 
+        # TODO: Ensure we are sampling correctly from this 
+        actions = dist.rsample()
+        log_probs = dist.log_prob(actions).sum(dim=-1)
+
+        return actions,log_probs, entropy
+
+
+    def _define_modules(self, input_dim:int, observation_dim: int, hidden_dim: int):
 
         fc1 = nn.Linear(input_dim, hidden_dim)
         
-        mu_layer = nn.Linear(hidden_dim, action_dim)
-        sigma_layer = nn.Linear(hidden_dim, action_dim)
+        mu_layer = nn.Linear(hidden_dim, observation_dim)
+        sigma_layer = nn.Linear(hidden_dim, observation_dim)
 
         return fc1, mu_layer, sigma_layer
 
