@@ -18,40 +18,64 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
+from transformers.models.idefics.processing_idefics import incremental_to_binary_attention_mask
 
 import multihopkg.eval
+from multihopkg.knowledge_graph import KnowledgeGraph
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
+from multihopkg.rl.graph_search.pn import GraphSearchPolicy, ITLGraphEnvironment
 import multihopkg.utils.ops as ops
 
 
 class LFramework(nn.Module):
-    def __init__(self, args, kg, mdl):
+    def __init__(
+        self,
+        model_dir: str,
+        model: str,
+        data_dir: str,
+        batch_size: int,
+        train_batch_size: int,
+        dev_batch_size: int,
+        start_epoch: int,
+        num_epochs: int,
+        num_wait_epochs: int,
+        num_peek_epochs: int,
+        learning_rate: float,
+        grad_norm: float,
+        adam_beta1: float,
+        adam_beta2: float,
+        # train: bool,
+        run_analysis: bool,
+        kg: KnowledgeGraph,
+        mdl: GraphSearchPolicy, # NOTE: TF is this ?
+    ):
+
         super(LFramework, self).__init__()
-        self.args = args
-        self.data_dir = args.data_dir
-        self.model_dir = args.model_dir
-        self.model = args.model
+        self.data_dir = data_dir  # Used by Child(ren)
+        self.model_dir = model_dir
+        self.model = model
 
         # Training hyperparameters
-        self.batch_size = args.batch_size
-        self.train_batch_size = args.train_batch_size
-        self.dev_batch_size = args.dev_batch_size
-        self.start_epoch = args.start_epoch
-        self.num_epochs = args.num_epochs
-        self.num_wait_epochs = args.num_wait_epochs
-        self.num_peek_epochs = args.num_peek_epochs
-        self.learning_rate = args.learning_rate
-        self.grad_norm = args.grad_norm
-        self.adam_beta1 = args.adam_beta1
-        self.adam_beta2 = args.adam_beta2
+        self.batch_size = batch_size
+        self.train_batch_size = train_batch_size
+        self.dev_batch_size = dev_batch_size
+        self.start_epoch = start_epoch
+        self.num_epochs = num_epochs
+        self.num_wait_epochs = num_wait_epochs
+        self.num_peek_epochs = num_peek_epochs
+        self.learning_rate = learning_rate
+        self.grad_norm = grad_norm
+        self.adam_beta1 = adam_beta1
+        self.adam_beta2 = adam_beta2
         self.optim = None
 
-        self.inference = not args.train
-        self.run_analysis = args.run_analysis
+        # self.inference = not train
+        self.run_analysis = run_analysis
 
+        # THESE TWO are modules and they are perhaps what is being propagated againsgt. I have no idea.
         self.kg = kg
         self.mdl = mdl
-        print('{} module created'.format(self.model))
+        print("{} module created".format(self.model))
 
     def print_all_model_parameters(self):
         print('\nModel Parameters')
@@ -126,6 +150,7 @@ class LFramework(nn.Module):
                         fns = loss['fn']
                     else:
                         fns = torch.cat([fns, loss['fn']])
+
             # Check training statistics
             stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
             if entropies:
@@ -274,23 +299,23 @@ class LFramework(nn.Module):
             torch.save(checkpoint_dict, out_tar)
             print('=> saving checkpoint to \'{}\''.format(out_tar))
 
-    def load_checkpoint(self, input_file):
-        """
-        Load model checkpoint.
-        :param n: Neural network module.
-        :param kg: Knowledge graph module.
-        :param input_file: Checkpoint file path.
-        """
-        if os.path.isfile(input_file):
-            print('=> loading checkpoint \'{}\''.format(input_file))
-            checkpoint = torch.load(input_file, map_location="cuda:{}".format(self.args.gpu))
-            self.load_state_dict(checkpoint['state_dict'])
-            if not self.inference:
-                self.start_epoch = checkpoint['epoch_id'] + 1
-                assert (self.start_epoch <= self.num_epochs)
-        else:
-            print('=> no checkpoint found at \'{}\''.format(input_file))
-
+    # def load_checkpoint(self, input_file):
+    #     """
+    #     Load model checkpoint.
+    #     :param n: Neural network module.
+    #     :param kg: Knowledge graph module.
+    #     :param input_file: Checkpoint file path.
+    #     """
+    #     if os.path.isfile(input_file):
+    #         print('=> loading checkpoint \'{}\''.format(input_file))
+    #         checkpoint = torch.load(input_file, map_location="cuda:{}".format(self.args.gpu))
+    #         self.load_state_dict(checkpoint['state_dict'])
+    #         if not self.inference:
+    #             self.start_epoch = checkpoint['epoch_id'] + 1
+    #             assert (self.start_epoch <= self.num_epochs)
+    #     else:
+    #         print('=> no checkpoint found at \'{}\''.format(input_file))
+    
     def export_to_embedding_projector(self):
         """
         Export knowledge base embeddings into .tsv files accepted by the Tensorflow Embedding Projector.

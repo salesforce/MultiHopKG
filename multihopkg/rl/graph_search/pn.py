@@ -13,29 +13,47 @@ import torch.nn.functional as F
 
 import multihopkg.utils.ops as ops
 from multihopkg.utils.ops import var_cuda, zeros_var_cuda
+from multihopkg.knowledge_graph import ITLKnowledgeGraph
+from multihopkg.vector_search import ANN_IndexMan
+from multihopkg.environments import Environment, Observation
+from typing import Tuple, List, Optional
+import pdb
 
 
 class GraphSearchPolicy(nn.Module):
-    def __init__(self, args):
+    def __init__(
+        self,
+        relation_only: bool,
+        history_dim: int,
+        history_num_layers: int,
+        entity_dim: int,
+        relation_dim: int,
+        ff_dropout_rate: float,
+        xavier_initialization: bool,
+        relation_only_in_path: bool,
+        reward_module: nn.Module,
+    ):
         super(GraphSearchPolicy, self).__init__()
-        self.model = args.model
-        self.relation_only = args.relation_only
+        # WARN: I am erasing self.model because I cannot see it being used anywhere here
+        # self.model = model
+        self.relation_only = relation_only
 
-        self.history_dim = args.history_dim
-        self.history_num_layers = args.history_num_layers
-        self.entity_dim = args.entity_dim
-        self.relation_dim = args.relation_dim
+        self.history_dim = history_dim
+        self.history_num_layers = history_num_layers
+        self.entity_dim = entity_dim
+        self.relation_dim = relation_dim
         if self.relation_only:
-            self.action_dim = args.relation_dim
+            self.action_dim = relation_dim
         else:
-            self.action_dim = args.entity_dim + args.relation_dim
-        self.ff_dropout_rate = args.ff_dropout_rate
-        self.rnn_dropout_rate = args.rnn_dropout_rate
-        self.action_dropout_rate = args.action_dropout_rate
+            self.action_dim = entity_dim + relation_dim
+        self.ff_dropout_rate = ff_dropout_rate
+        # WARN: Same here. NOt seemingy used anywheres
+        # self.rnn_dropout_rate = rnn_dropout_rate
+        # self.action_dropout_rate = action_dropout_rate
 
-        self.xavier_initialization = args.xavier_initialization
+        self.xavier_initialization = xavier_initialization
 
-        self.relation_only_in_path = args.relation_only_in_path
+        self.relation_only_in_path = relation_only_in_path
         self.path = None
 
         # Set policy network modules
@@ -46,10 +64,40 @@ class GraphSearchPolicy(nn.Module):
         self.fn = None
         self.fn_kg = None
 
-    def transit(self, e, obs, kg, use_action_space_bucketing=True, merge_aspace_batching_outcome=False):
+    # * Added
+    def policy_nn_fun(self, X2):
         """
-        Compute the next action distribution based on
-            (a) the current node (entity) in KG and the query relation
+        Input comes from:
+            X = self.W1(X)
+            X = F.relu(X)
+            X = self.W1Dropout(X)
+            X = self.W2(X)
+            X2 = self.W2Dropout(X)
+        """
+
+        mu = self.mu_layer(X2)
+        log_sigma = self.sigma_layer(X2)
+        log_sigma = torch.clamp(log_sigma, min=-20, max=2)
+        sigma = torch.exp(log_sigma)
+
+        # Create a normal distribution using the mean and standard deviation
+        dist = torch.distributions.Normal(mu, sigma)
+        entropy = dist.entropy().sum(dim=-1)
+        return dist, entropy
+
+    # * Added
+
+    def transit(
+        self,
+        e,
+        obs,
+        kg,
+        use_action_space_bucketing=True,
+        merge_aspace_batching_outcome=False,
+    ):
+        """
+        Compute the next action distribution based onsample_action
+            current node (entity) in KG and the query relation
             (b) action history representation
         :param e: agent location (node) at step t.
         :param obs: agent observation at step t.
@@ -60,7 +108,7 @@ class GraphSearchPolicy(nn.Module):
             last_r: label of edge traversed in the previous step
             seen_nodes: notes seen on the paths
         :param kg: Knowledge graph environment.
-        :param use_action_space_bucketing: If set, group the action space of different nodes 
+        :param use_action_space_bucketing: If set, group the action space of different nodes
             into buckets by their sizes.
         :param merge_aspace_batch_outcome: If set, merge the transition probability distribution
             generated of different action space bucket into a single batch.
@@ -101,7 +149,10 @@ class GraphSearchPolicy(nn.Module):
             (r_space, e_space), action_mask = action_space
             A = self.get_action_embedding((r_space, e_space), kg)
             action_dist = F.softmax(
-                torch.squeeze(A @ torch.unsqueeze(X2, 2), 2) - (1 - action_mask) * ops.HUGE_INT, dim=-1)
+                torch.squeeze(A @ torch.unsqueeze(X2, 2), 2)
+                - (1 - action_mask) * ops.HUGE_INT,
+                dim=-1,
+            )
             # action_dist = ops.weighted_softmax(torch.squeeze(A @ torch.unsqueeze(X2, 2), 2), action_mask)
             return action_dist, ops.entropy(action_dist)
 
@@ -118,35 +169,40 @@ class GraphSearchPolicy(nn.Module):
             return action_space
 
         if use_action_space_bucketing:
-            """
-            
-            """
+            """ """
             db_outcomes = []
             entropy_list = []
             references = []
-            db_action_spaces, db_references = self.get_action_space_in_buckets(e, obs, kg)
+            db_action_spaces, db_references = self.get_action_space_in_buckets(
+                e, obs, kg
+            )
             for action_space_b, reference_b in zip(db_action_spaces, db_references):
                 X2_b = X2[reference_b, :]
                 action_dist_b, entropy_b = policy_nn_fun(X2_b, action_space_b)
                 references.extend(reference_b)
                 db_outcomes.append((action_space_b, action_dist_b))
                 entropy_list.append(entropy_b)
-            inv_offset = [i for i, _ in sorted(enumerate(references), key=lambda x: x[1])]
+            inv_offset = [
+                i for i, _ in sorted(enumerate(references), key=lambda x: x[1])
+            ]
             entropy = torch.cat(entropy_list, dim=0)[inv_offset]
             if merge_aspace_batching_outcome:
                 db_action_dist = []
                 for _, action_dist in db_outcomes:
                     db_action_dist.append(action_dist)
                 action_space = pad_and_cat_action_space(db_action_spaces, inv_offset)
-                action_dist = ops.pad_and_cat(db_action_dist, padding_value=0)[inv_offset]
+                action_dist = ops.pad_and_cat(db_action_dist, padding_value=0)[
+                    inv_offset
+                ]
                 db_outcomes = [(action_space, action_dist)]
                 inv_offset = None
         else:
             action_space = self.get_action_space(e, obs, kg)
-            action_dist, entropy = policy_nn_fun(X2, action_space)
+            action_dist, entropy = policy_nn_fun(X2)
             db_outcomes = [(action_space, action_dist)]
             inv_offset = None
 
+        #! entropy should not be returned
         return db_outcomes, inv_offset, entropy
 
     def initialize_path(self, init_action, kg):
@@ -157,8 +213,12 @@ class GraphSearchPolicy(nn.Module):
             init_action_embedding = self.get_action_embedding(init_action, kg)
         init_action_embedding.unsqueeze_(1)
         # [num_layers, batch_size, dim]
-        init_h = zeros_var_cuda([self.history_num_layers, len(init_action_embedding), self.history_dim])
-        init_c = zeros_var_cuda([self.history_num_layers, len(init_action_embedding), self.history_dim])
+        init_h = zeros_var_cuda(
+            [self.history_num_layers, len(init_action_embedding), self.history_dim]
+        )
+        init_c = zeros_var_cuda(
+            [self.history_num_layers, len(init_action_embedding), self.history_dim]
+        )
         self.path = [self.path_encoder(init_action_embedding, (init_h, init_c))[1]]
 
     def update_path(self, action, kg, offset=None):
@@ -170,6 +230,7 @@ class GraphSearchPolicy(nn.Module):
         :param offset: (Variable:batch) if None, adjust path history with the given offset, used for search
         :param KG: Knowledge graph environment.
         """
+
         def offset_path_history(p, offset):
             for i, x in enumerate(p):
                 if type(x) is tuple:
@@ -186,7 +247,9 @@ class GraphSearchPolicy(nn.Module):
         if offset is not None:
             offset_path_history(self.path, offset)
 
-        self.path.append(self.path_encoder(action_embedding.unsqueeze(1), self.path[-1])[1])
+        self.path.append(
+            self.path_encoder(action_embedding.unsqueeze(1), self.path[-1])[1]
+        )
 
     def get_action_space_in_buckets(self, e, obs, kg, collapse_entities=False):
         """
@@ -224,10 +287,10 @@ class GraphSearchPolicy(nn.Module):
             which is used later to restore the output results to the original order.
         """
         e_s, q, e_t, last_step, last_r, seen_nodes = obs
-        assert(len(e) == len(last_r))
-        assert(len(e) == len(e_s))
-        assert(len(e) == len(q))
-        assert(len(e) == len(e_t))
+        assert len(e) == len(last_r)
+        assert len(e) == len(e_s)
+        assert len(e) == len(q)
+        assert len(e) == len(e_t)
         db_action_spaces, db_references = [], []
 
         if collapse_entities:
@@ -276,14 +339,16 @@ class GraphSearchPolicy(nn.Module):
         e_s, q, e_t, last_step, last_r, seen_nodes = obs
 
         # Prevent the agent from selecting the ground truth edge
-        ground_truth_edge_mask = self.get_ground_truth_edge_mask(e, r_space, e_space, e_s, q, e_t, kg)
+        ground_truth_edge_mask = self.get_ground_truth_edge_mask(
+            e, r_space, e_space, e_s, q, e_t, kg
+        )
         action_mask -= ground_truth_edge_mask
         self.validate_action_mask(action_mask)
 
         # Mask out false negatives in the final step
         if last_step:
             false_negative_mask = self.get_false_negative_mask(e_space, e_s, q, e_t, kg)
-            action_mask *= (1 - false_negative_mask)
+            action_mask *= 1 - false_negative_mask
             self.validate_action_mask(action_mask)
 
         # Prevent the agent from stopping in the middle of a path
@@ -298,12 +363,21 @@ class GraphSearchPolicy(nn.Module):
         return (r_space, e_space), action_mask
 
     def get_ground_truth_edge_mask(self, e, r_space, e_space, e_s, q, e_t, kg):
-        ground_truth_edge_mask = \
-            ((e == e_s).unsqueeze(1) * (r_space == q.unsqueeze(1)) * (e_space == e_t.unsqueeze(1)))
+        ground_truth_edge_mask = (
+            (e == e_s).unsqueeze(1)
+            * (r_space == q.unsqueeze(1))
+            * (e_space == e_t.unsqueeze(1))
+        )
         inv_q = kg.get_inv_relation_id(q)
-        inv_ground_truth_edge_mask = \
-            ((e == e_t).unsqueeze(1) * (r_space == inv_q.unsqueeze(1)) * (e_space == e_s.unsqueeze(1)))
-        return ((ground_truth_edge_mask + inv_ground_truth_edge_mask) * (e_s.unsqueeze(1) != kg.dummy_e)).float()
+        inv_ground_truth_edge_mask = (
+            (e == e_t).unsqueeze(1)
+            * (r_space == inv_q.unsqueeze(1))
+            * (e_space == e_s.unsqueeze(1))
+        )
+        return (
+            (ground_truth_edge_mask + inv_ground_truth_edge_mask)
+            * (e_s.unsqueeze(1) != kg.dummy_e)
+        ).float()
 
     def get_answer_mask(self, e_space, e_s, q, kg):
         if kg.args.mask_test_false_negatives:
@@ -317,7 +391,9 @@ class GraphSearchPolicy(nn.Module):
                 answer_vector = var_cuda(torch.LongTensor([[kg.num_entities]]))
             else:
                 answer_vector = answer_vectors[_e_s][_q]
-            answer_mask = torch.sum(e_space[i].unsqueeze(0) == answer_vector, dim=0).long()
+            answer_mask = torch.sum(
+                e_space[i].unsqueeze(0) == answer_vector, dim=0
+            ).long()
             answer_masks.append(answer_mask)
         answer_mask = torch.cat(answer_masks).view(len(e_space), -1)
         return answer_mask
@@ -327,21 +403,23 @@ class GraphSearchPolicy(nn.Module):
         # This is a trick applied during training where we convert a multi-answer predction problem into several
         # single-answer prediction problems. By masking out the other answers in the training set, we are forcing
         # the agent to walk towards a particular answer.
-        # This trick does not affect inference on the test set: at inference time the ground truth answer will not 
-        # appear in the answer mask. This can be checked by uncommenting the following assertion statement. 
+        # This trick does not affect inference on the test set: at inference time the ground truth answer will not
+        # appear in the answer mask. This can be checked by uncommenting the following assertion statement.
         # Note that the assertion statement can trigger in the last batch if you're using a batch_size > 1 since
         # we append dummy examples to the last batch to make it the required batch size.
-        # The assertion statement will also trigger in the dev set inference of NELL-995 since we randomly 
+        # The assertion statement will also trigger in the dev set inference of NELL-995 since we randomly
         # sampled the dev set from the training data.
         # assert(float((answer_mask * (e_space == e_t.unsqueeze(1)).long()).sum()) == 0)
-        false_negative_mask = (answer_mask * (e_space != e_t.unsqueeze(1)).long()).float()
+        false_negative_mask = (
+            answer_mask * (e_space != e_t.unsqueeze(1)).long()
+        ).float()
         return false_negative_mask
 
     def validate_action_mask(self, action_mask):
         action_mask_min = action_mask.min()
         action_mask_max = action_mask.max()
-        assert (action_mask_min == 0 or action_mask_min == 1)
-        assert (action_mask_max == 0 or action_mask_max == 1)
+        assert action_mask_min == 0 or action_mask_min == 1
+        assert action_mask_max == 0 or action_mask_max == 1
 
     def get_action_embedding(self, action, kg):
         """
@@ -370,27 +448,267 @@ class GraphSearchPolicy(nn.Module):
             input_dim = self.history_dim + self.entity_dim * 2 + self.relation_dim
         else:
             input_dim = self.history_dim + self.entity_dim + self.relation_dim
+
         self.W1 = nn.Linear(input_dim, self.action_dim)
         self.W2 = nn.Linear(self.action_dim, self.action_dim)
         self.W1Dropout = nn.Dropout(p=self.ff_dropout_rate)
         self.W2Dropout = nn.Dropout(p=self.ff_dropout_rate)
         if self.relation_only_in_path:
-            self.path_encoder = nn.LSTM(input_size=self.relation_dim,
-                                        hidden_size=self.history_dim,
-                                        num_layers=self.history_num_layers,
-                                        batch_first=True)
+            self.path_encoder = nn.LSTM(
+                input_size=self.relation_dim,
+                hidden_size=self.history_dim,
+                num_layers=self.history_num_layers,
+                batch_first=True,
+            )
         else:
-            self.path_encoder = nn.LSTM(input_size=self.action_dim,
-                                        hidden_size=self.history_dim,
-                                        num_layers=self.history_num_layers,
-                                        batch_first=True)
+            self.path_encoder = nn.LSTM(
+                input_size=self.action_dim,
+                hidden_size=self.history_dim,
+                num_layers=self.history_num_layers,
+                batch_first=True,
+            )
 
     def initialize_modules(self):
         if self.xavier_initialization:
             nn.init.xavier_uniform_(self.W1.weight)
             nn.init.xavier_uniform_(self.W2.weight)
             for name, param in self.path_encoder.named_parameters():
-                if 'bias' in name:
+                if "bias" in name:
                     nn.init.constant_(param, 0.0)
-                elif 'weight' in name:
+                elif "weight" in name:
                     nn.init.xavier_normal_(param)
+
+
+class ITLGraphEnvironment(Environment):
+
+    def __init__(
+        self,
+        question_embedding_module: nn.Module,  # Generally a BertModel
+        question_embedding_module_trainable: bool,
+        entity_dim: int,
+        ff_dropout_rate: float,
+        history_dim: int,
+        history_num_layers: int,
+        knowledge_graph: ITLKnowledgeGraph,
+        relation_dim: int,
+        ann_index_manager: ANN_IndexMan,
+        steps_in_episode: int
+    ):
+        # Should be injected via information extracted from Knowledge Grap
+        self.action_dim = relation_dim  # TODO: Ensure this is a solid default
+        self.question_embedding_module = question_embedding_module
+        self.question_embedding_module_trainable = question_embedding_module_trainable
+        self.question_dim = self.question_embedding_module.config.hidden_size
+        self.entity_dim = entity_dim
+        self.ff_dropout_rate = ff_dropout_rate
+        self.history_dim = history_dim  # History is STATE
+        self.history_encoder_num_layers = history_num_layers
+        self.knowledge_graph = knowledge_graph
+        self.padding_value = (
+            question_embedding_module.config.pad_token_id
+        )  # TODO (mega): Confirm this is correct to get the padding value
+        self.path = None
+        self.relation_dim = relation_dim
+        self.ann_index_manager = ann_index_manager
+        self.steps_in_episode = steps_in_episode
+
+        ########################################
+        # Core States (4/5)
+        ########################################
+        self.current_questions_emb : Optional[torch.Tensor] = None
+        self.current_position: Optional[torch.Tensor] = None
+        self.current_step_no = self.steps_in_episode # This value denotes being at "reset" state. As in, when episode is done
+
+        ########################################
+        # Get the actual torch modules defined
+        # Of most importance is self.path_encoder
+        ########################################
+        # (self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder, self.concat_projector) = (
+        (self.concat_projector, self.W2, self.W1Dropout, self.W2Dropout, _) = (
+            self._define_modules(
+                self.entity_dim,
+                self.ff_dropout_rate,
+                self.history_dim,
+                self.history_encoder_num_layers,
+                self.relation_dim,
+                self.question_dim,
+            )
+        )
+
+    def get_llm_embeddings(self, questions: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Will take a list of list of token ids, pad them and then pass them to the embedding module to get single embeddings for each question
+        Args:
+            - questions (List[List[int]]): The tensor denoting the questions for this batch.
+        Return:
+            - questions_embeddings (torch.Tensor): The embeddings of the questions.
+        """
+        if self.question_embedding_module_trainable:
+            self.question_embedding_module.train()
+        else:
+            self.question_embedding_module.eval()
+
+        # Questions are of oshape List[torch.Tensor] This can be converted to -> List[torch[int]] where the inner torch is of different values
+        # Then we can Imagine this to be a td concatenation where We have a single 1
+
+        # Format the input for the legacy funciton inside
+        tensorized_questions = [
+            torch.from_numpy(q).to(torch.int32).view(1, -1) for q in questions
+        ]
+        # We should conver them to embeddinggs before sending them over
+
+        padded_tokens, attention_mask = ops.pad_and_cat(
+            tensorized_questions, padding_value=self.padding_value, padding_dim=1
+        )
+        embedding_output = self.question_embedding_module(
+            input_ids=padded_tokens, attention_mask=attention_mask
+        )
+        last_hidden_state = embedding_output.last_hidden_state
+        # TODO: Figure out if we want to grab a single one of the embeddings or just aggregaate them through mean.
+        final_embedding = last_hidden_state.mean(dim=1)
+
+        return final_embedding
+
+    # TOREM: We need to test if this can replace forward for now.
+    def step(self, actions: torch.Tensor) -> Observation:
+        """
+        This one will simply find the closes emebdding in our class and dump it here as an observation.
+        Args:
+            - actions (torch.Tensor): Shall be of shape (batch_size, action_dimension)
+        Return:
+            - observations (torch.Tensor): The observations at the current state. Shape: (batch_size, observation_dim)
+        """
+        assert isinstance(
+            self.current_position, torch.Tensor
+        ), f"invalid self.current_position, type: {type(self.current_position)}. Please make sure to run ITLKnowledgeGraph::rest() before running get_observations."
+
+        self.current_step_no += 1
+
+        # Make sure action and current position are detached from computation graph
+        detached_actions = actions.detach()
+        detached_curpos = self.current_position.detach()
+
+        assert isinstance(
+            self.current_questions_emb, torch.Tensor
+        ), f"self.current_questions_emb (type: {type(self.current_questions_emb)}) must be set via `reset` before calling this."
+
+        ########################################
+        # ANN mostly for debugging for now
+        ########################################
+        new_pos = detached_curpos + detached_actions
+        ann_matches = self.ann_index_manager.search(new_pos, topk=1)
+        # self.current_position = ann_matches # Either
+        self.current_position = new_pos # Or
+
+        ########################################
+        # Projections
+        ########################################
+        concatenations = torch.cat([self.current_questions_emb, self.current_position], dim=-1)
+        projected_state = self.concat_projector(concatenations)
+
+        # TODO: Think about this, we have a transformer so I dont think we need to do this.
+        # concatenations_w_sequence = concatenations.unsqueeze(1) 
+        # cur_state, _ = self.path_encoder(concatenations)
+
+        observation = Observation(position=new_pos, state=projected_state)
+
+        return observation
+
+
+    def _define_modules(
+        self,
+        entity_dim: int,
+        ff_dropout_rate: float,
+        history_dim: int,
+        history_num_layers: int,
+        relation_dim: int,
+        question_dim: int,
+    ) -> Tuple[nn.Module, nn.Module, nn.Module, nn.Module, nn.Module]:
+        # We assume both relationships and entityes have mbeddings
+        print(f"entity_dim: {entity_dim}, relation_dim: {relation_dim}")
+        # input_dim = history_dim + entity_dim + relation_dim
+        # We assume action_dim is relation_dim
+        action_dim = relation_dim
+        input_dim = action_dim + question_dim
+
+        # W1 = nn.Linear(input_dim, action_dim)
+        # W2 = nn.Linear(action_dim, action_dim)
+        W1 = nn.Linear(input_dim, history_dim)
+        W2 = nn.Linear(history_dim, action_dim) # We ignore this for now, leave it so that file runs
+        W1Dropout = nn.Dropout(p=ff_dropout_rate)
+        W2Dropout = nn.Dropout(p=ff_dropout_rate) # Same ignore here
+
+        # # TODO: Check if we actually want to use lstm, we have a tranformer with positional encoding so I dont think we need this.
+        path_encoder = nn.LSTM(
+            input_size=action_dim + question_dim,
+            hidden_size=history_dim, # AFAIK equiv this output size 
+            num_layers=history_num_layers,
+            batch_first=True,
+        )
+
+
+        # State Variables for holding rollout information
+        # I might regret this
+        self.current_position = None
+
+        return W1, W2, W1Dropout, W2Dropout, path_encoder
+
+    def reset(self, initial_states_info: torch.Tensor) -> Observation:
+        """
+        Will reset the episode to the initial position
+        This will happen by grabbign the initial_states_info embeddings, concatenating them with the centroid and then passing them to the environment
+        Args:
+            - initial_state_info (torch.Tensor): In this implemntation sit is the initial_states_info
+        Returnd:
+            - postion (torch.Tensor): Position in the graph
+            - state (torch.Tensor): Aggregation of states visited so far summarized in a single vector per batch element.
+        """
+
+        # Sanity Check: Make sure we finilized previos epsiode correclty
+        if self.current_step_no != self.steps_in_episode:
+            raise RuntimeError(
+                "Mis-use of the environment. Episode step must've been set back to 0 before end."
+                " Maybe you did not end your episode correctly"
+            )
+        ## Values
+        # Local Alias: initial_states_info is just a name we stick to in order to comply with inheritance of Environment.
+        self.current_questions_emb = initial_states_info # (batch_size, emb_dim)
+        self.current_step_no = 0
+
+        # Create more complete representation of state
+        centroid = self.knowledge_graph.get_centroid()
+        tiled_centroids = centroid.unsqueeze(0).repeat(len(initial_states_info), 1)
+        concatenations = torch.cat([self.current_questions_emb, tiled_centroids], dim=-1)
+        projected_concat = self.concat_projector(concatenations)
+        # NOTE: We were using path encoder here before and are not sure if removing is good idea.
+
+        # This was for when we were receiving sequences. I mean I gues we still are.
+        projected_state = projected_concat
+        self.current_step = 0
+
+        self.current_position = centroid.unsqueeze(0).repeat(
+            len(initial_states_info), 1
+        )
+
+        observation = Observation(
+            position=self.current_position, state=projected_state
+        )
+
+        return observation
+
+    def get_centroid(self) -> torch.Tensor:
+        if not self.centroid:
+            self.centroid = self.knowledge_graph.get_centroid()
+        return self.centroid
+
+    # * This is Nura's code. Might not really bee kj
+    def get_action_space(self, e, obs, kg):
+        r_space, e_space = kg.action_space[0][0][e], kg.action_space[0][1][e]
+        action_mask = kg.action_space[1][e]
+        action_space = ((r_space, e_space), action_mask)
+        return action_space
+
+
+# TODO: Implementn ann
+def run_ann(approximate_states: torch.Tensor) -> torch.Tensor:
+    raise NotImplementedError

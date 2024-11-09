@@ -8,20 +8,27 @@
 """
 
 import collections
-import numpy as np
-import os
-import pickle
-from transformers import PreTrainedTokenizer
-import pandas as pd
 import json
+import os
+import pdb
+import pickle
 from datetime import datetime
 
+import numpy as np
+import pandas as pd
+from rich import traceback
+from torch.nn import Embedding as nn_Embedding
+from transformers import PreTrainedTokenizer
 
-START_RELATION = 'START_RELATION'
-NO_OP_RELATION = 'NO_OP_RELATION'
-NO_OP_ENTITY = 'NO_OP_ENTITY'
-DUMMY_RELATION = 'DUMMY_RELATION'
-DUMMY_ENTITY = 'DUMMY_ENTITY'
+from  multihopkg.utils.setup import get_git_root
+
+traceback.install()
+
+START_RELATION = "START_RELATION"
+NO_OP_RELATION = "NO_OP_RELATION"
+NO_OP_ENTITY = "NO_OP_ENTITY"
+DUMMY_RELATION = "DUMMY_RELATION"
+DUMMY_ENTITY = "DUMMY_ENTITY"
 
 DUMMY_RELATION_ID = 0
 START_RELATION_ID = 1
@@ -41,6 +48,7 @@ def check_answer_ratio(examples):
         answer_ratio += len(entity_dict[e1])
     return answer_ratio / len(entity_dict)
 
+
 def check_relation_answer_ratio(input_file, kg):
     example_dict = {}
     with open(input_file) as f:
@@ -57,35 +65,38 @@ def check_relation_answer_ratio(input_file, kg):
         r_answer_ratio[r] = check_answer_ratio(example_dict[r])
     return r_answer_ratio
 
+
 def change_to_test_model_path(dataset, model_path):
     model_dir = os.path.dirname(os.path.dirname(model_path))
     model_subdir = os.path.basename(os.path.dirname(model_path))
     file_name = os.path.basename(model_path)
-    new_model_subdir = dataset + '.test' + model_subdir[len(dataset):]
-    new_model_subdir += '-test'
+    new_model_subdir = dataset + ".test" + model_subdir[len(dataset) :]
+    new_model_subdir += "-test"
     new_model_path = os.path.join(model_dir, new_model_subdir, file_name)
     return new_model_path
 
+
 def get_train_path(data_dir: str, test: bool, model: str):
-    if 'NELL' in data_dir:
-        if not model.startswith('point'):
+    if "NELL" in data_dir:
+        if not model.startswith("point"):
             if test:
-                train_path = os.path.join(data_dir, 'train.dev.large.triples')
+                train_path = os.path.join(data_dir, "train.dev.large.triples")
             else:
-                train_path = os.path.join(data_dir, 'train.large.triples')
+                train_path = os.path.join(data_dir, "train.large.triples")
         else:
             if test:
-                train_path = os.path.join(data_dir, 'train.dev.triples')
+                train_path = os.path.join(data_dir, "train.dev.triples")
             else:
-                train_path = os.path.join(data_dir, 'train.triples')
+                train_path = os.path.join(data_dir, "train.triples")
     else:
-        train_path = os.path.join(data_dir, 'train.triples')
+        train_path = os.path.join(data_dir, "train.triples")
 
     return train_path
 
+
 def load_seen_entities(adj_list_path, entity_index_path):
     _, id2entity = load_index(entity_index_path)
-    with open(adj_list_path, 'rb') as f:
+    with open(adj_list_path, "rb") as f:
         adj_list = pickle.load(f)
     seen_entities = set()
     for e1 in adj_list:
@@ -93,10 +104,18 @@ def load_seen_entities(adj_list_path, entity_index_path):
         for r in adj_list[e1]:
             for e2 in adj_list[e1][r]:
                 seen_entities.add(id2entity[e2])
-    print('{} seen entities loaded...'.format(len(seen_entities)))
+    print("{} seen entities loaded...".format(len(seen_entities)))
     return seen_entities
- 
-def load_triples_with_label(data_path, r, entity_index_path, relation_index_path, seen_entities=None, verbose=False):
+
+
+def load_triples_with_label(
+    data_path,
+    r,
+    entity_index_path,
+    relation_index_path,
+    seen_entities=None,
+    verbose=False,
+):
     entity2id, _ = load_index(entity_index_path)
     relation2id, _ = load_index(relation_index_path)
 
@@ -107,19 +126,31 @@ def load_triples_with_label(data_path, r, entity_index_path, relation_index_path
     with open(data_path) as f:
         num_skipped = 0
         for line in f:
-            pair, label = line.strip().split(': ')
-            e1, e2 = pair.strip().split(',')
+            pair, label = line.strip().split(": ")
+            e1, e2 = pair.strip().split(",")
             if seen_entities and (not e1 in seen_entities or not e2 in seen_entities):
                 num_skipped += 1
                 if verbose:
-                    print('Skip triple ({}) with unseen entity: {}'.format(num_skipped, line.strip())) 
+                    print(
+                        "Skip triple ({}) with unseen entity: {}".format(
+                            num_skipped, line.strip()
+                        )
+                    )
                 continue
             triples.append(triple2ids(e1, e2, r))
             labels.append(label.strip())
     return triples, labels
 
-def load_triples(data_path, entity_index_path, relation_index_path, group_examples_by_query=False,
-                 add_reverse_relations=False, seen_entities=None, verbose=False):
+
+def load_triples(
+    data_path,
+    entity_index_path,
+    relation_index_path,
+    group_examples_by_query=False,
+    add_reverse_relations=False,
+    seen_entities=None,
+    verbose=False,
+):
     """
     Convert triples stored on disc into indices.
     """
@@ -139,7 +170,11 @@ def load_triples(data_path, entity_index_path, relation_index_path, group_exampl
             if seen_entities and (not e1 in seen_entities or not e2 in seen_entities):
                 num_skipped += 1
                 if verbose:
-                    print('Skip triple ({}) with unseen entity: {}'.format(num_skipped, line.strip())) 
+                    print(
+                        "Skip triple ({}) with unseen entity: {}".format(
+                            num_skipped, line.strip()
+                        )
+                    )
                 continue
             # if r in ['concept:agentbelongstoorganization', 'concept:teamplaysinleague']:
             #     continue
@@ -151,7 +186,7 @@ def load_triples(data_path, entity_index_path, relation_index_path, group_exampl
                     triple_dict[e1_id][r_id] = set()
                 triple_dict[e1_id][r_id].add(e2_id)
                 if add_reverse_relations:
-                    r_inv = r + '_inv'
+                    r_inv = r + "_inv"
                     e2_id, e1_id, r_inv_id = triple2ids(e2, e1, r_inv)
                     if e2_id not in triple_dict:
                         triple_dict[e2_id] = {}
@@ -161,13 +196,14 @@ def load_triples(data_path, entity_index_path, relation_index_path, group_exampl
             else:
                 triples.append(triple2ids(e1, e2, r))
                 if add_reverse_relations:
-                    triples.append(triple2ids(e2, e1, r + '_inv'))
+                    triples.append(triple2ids(e2, e1, r + "_inv"))
     if group_examples_by_query:
         for e1_id in triple_dict:
             for r_id in triple_dict[e1_id]:
                 triples.append((e1_id, list(triple_dict[e1_id][r_id]), r_id))
-    print('{} triples loaded from {}'.format(len(triples), data_path))
+    print("{} triples loaded from {}".format(len(triples), data_path))
     return triples
+
 
 def load_entity_hist(input_path):
     entity_hist = {}
@@ -176,6 +212,7 @@ def load_entity_hist(input_path):
             v, f = line.strip().split()
             entity_hist[v] = int(f)
     return entity_hist
+
 
 def load_index(input_path):
     index, rev_index = {}, {}
@@ -186,7 +223,10 @@ def load_index(input_path):
             rev_index[i] = v
     return index, rev_index
 
-def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mode, add_reverse_relations=True):
+
+def prepare_kb_envrioment(
+    raw_kb_path, train_path, dev_path, test_path, test_mode, add_reverse_relations=True
+):
     """
     Process KB data which was saved as a set of triples.
         (a) Remove train and test triples from the KB envrionment.
@@ -204,16 +244,18 @@ def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mod
     def get_type(e_name):
         if e_name == DUMMY_ENTITY:
             return DUMMY_ENTITY
-        if 'nell-995' in data_dir.lower():
-            if '_' in e_name:
-                return e_name.split('_')[1]
+        if "nell-995" in data_dir.lower():
+            if "_" in e_name:
+                return e_name.split("_")[1]
             else:
-                return 'numerical'
+                return "numerical"
         else:
-            return 'entity'
+            return "entity"
 
     def hist_to_vocab(_dict):
-        return sorted(sorted(_dict.items(), key=lambda x: x[0]), key=lambda x: x[1], reverse=True)
+        return sorted(
+            sorted(_dict.items(), key=lambda x: x[0]), key=lambda x: x[1], reverse=True
+        )
 
     # Create entity and relation indices
     entity_hist = collections.defaultdict(int)
@@ -240,9 +282,9 @@ def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mod
         e1, e2, r = line.strip().split()
         entity_hist[e1] += 1
         entity_hist[e2] += 1
-        if 'nell-995' in data_dir.lower():
-            t1 = e1.split('_')[1] if '_' in e1 else 'numerical'
-            t2 = e2.split('_')[1] if '_' in e2 else 'numerical'
+        if "nell-995" in data_dir.lower():
+            t1 = e1.split("_")[1] if "_" in e1 else "numerical"
+            t2 = e2.split("_")[1] if "_" in e2 else "numerical"
         else:
             t1 = get_type(e1)
             t2 = get_type(e2)
@@ -250,29 +292,29 @@ def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mod
         type_hist[t2] += 1
         relation_hist[r] += 1
         if add_reverse_relations:
-            inv_r = r + '_inv'
+            inv_r = r + "_inv"
             relation_hist[inv_r] += 1
     # Save the entity and relation indices sorted by decreasing frequency
-    with open(os.path.join(data_dir, 'entity2id.txt'), 'w') as o_f:
-        o_f.write('{}\t{}\n'.format(DUMMY_ENTITY, DUMMY_ENTITY_ID))
-        o_f.write('{}\t{}\n'.format(NO_OP_ENTITY, NO_OP_ENTITY_ID))
+    with open(os.path.join(data_dir, "entity2id.txt"), "w") as o_f:
+        o_f.write("{}\t{}\n".format(DUMMY_ENTITY, DUMMY_ENTITY_ID))
+        o_f.write("{}\t{}\n".format(NO_OP_ENTITY, NO_OP_ENTITY_ID))
         for e, freq in hist_to_vocab(entity_hist):
-            o_f.write('{}\t{}\n'.format(e, freq))
-    with open(os.path.join(data_dir, 'relation2id.txt'), 'w') as o_f:
-        o_f.write('{}\t{}\n'.format(DUMMY_RELATION, DUMMY_RELATION_ID))
-        o_f.write('{}\t{}\n'.format(START_RELATION, START_RELATION_ID))
-        o_f.write('{}\t{}\n'.format(NO_OP_RELATION, NO_OP_RELATION_ID))
+            o_f.write("{}\t{}\n".format(e, freq))
+    with open(os.path.join(data_dir, "relation2id.txt"), "w") as o_f:
+        o_f.write("{}\t{}\n".format(DUMMY_RELATION, DUMMY_RELATION_ID))
+        o_f.write("{}\t{}\n".format(START_RELATION, START_RELATION_ID))
+        o_f.write("{}\t{}\n".format(NO_OP_RELATION, NO_OP_RELATION_ID))
         for r, freq in hist_to_vocab(relation_hist):
-            o_f.write('{}\t{}\n'.format(r, freq))
-    with open(os.path.join(data_dir, 'type2id.txt'), 'w') as o_f:
+            o_f.write("{}\t{}\n".format(r, freq))
+    with open(os.path.join(data_dir, "type2id.txt"), "w") as o_f:
         for t, freq in hist_to_vocab(type_hist):
-            o_f.write('{}\t{}\n'.format(t, freq))
-    print('{} entities indexed'.format(len(entity_hist)))
-    print('{} relations indexed'.format(len(relation_hist)))
-    print('{} types indexed'.format(len(type_hist)))
-    entity2id, id2entity = load_index(os.path.join(data_dir, 'entity2id.txt'))
-    relation2id, id2relation = load_index(os.path.join(data_dir, 'relation2id.txt'))
-    type2id, id2type = load_index(os.path.join(data_dir, 'type2id.txt'))
+            o_f.write("{}\t{}\n".format(t, freq))
+    print("{} entities indexed".format(len(entity_hist)))
+    print("{} relations indexed".format(len(relation_hist)))
+    print("{} types indexed".format(len(type_hist)))
+    entity2id, id2entity = load_index(os.path.join(data_dir, "entity2id.txt"))
+    relation2id, id2relation = load_index(os.path.join(data_dir, "relation2id.txt"))
+    type2id, id2type = load_index(os.path.join(data_dir, "type2id.txt"))
 
     removed_triples = set(removed_triples)
     adj_list = collections.defaultdict(collections.defaultdict)
@@ -280,7 +322,7 @@ def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mod
     num_facts = 0
     for line in set(raw_kb_triples + keep_triples):
         e1, e2, r = line.strip().split()
-        triple_signature = '{}\t{}\t{}'.format(e1, e2, r)
+        triple_signature = "{}\t{}\t{}".format(e1, e2, r)
         e1_id = entity2id[e1]
         e2_id = entity2id[e2]
         t1 = get_type(e1)
@@ -294,35 +336,48 @@ def prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, test_mod
             if not r_id in adj_list[e1_id]:
                 adj_list[e1_id][r_id] = set()
             if e2_id in adj_list[e1_id][r_id]:
-                print('Duplicate fact: {} ({}, {}, {})!'.format(
-                    line.strip(), id2entity[e1_id], id2relation[r_id], id2entity[e2_id]))
+                print(
+                    "Duplicate fact: {} ({}, {}, {})!".format(
+                        line.strip(),
+                        id2entity[e1_id],
+                        id2relation[r_id],
+                        id2entity[e2_id],
+                    )
+                )
             adj_list[e1_id][r_id].add(e2_id)
             num_facts += 1
             if add_reverse_relations:
-                inv_r = r + '_inv'
+                inv_r = r + "_inv"
                 inv_r_id = relation2id[inv_r]
                 if not inv_r_id in adj_list[e2_id]:
                     adj_list[e2_id][inv_r_id] = set([])
                 if e1_id in adj_list[e2_id][inv_r_id]:
-                    print('Duplicate fact: {} ({}, {}, {})!'.format(
-                        line.strip(), id2entity[e2_id], id2relation[inv_r_id], id2entity[e1_id]))
+                    print(
+                        "Duplicate fact: {} ({}, {}, {})!".format(
+                            line.strip(),
+                            id2entity[e2_id],
+                            id2relation[inv_r_id],
+                            id2entity[e1_id],
+                        )
+                    )
                 adj_list[e2_id][inv_r_id].add(e1_id)
                 num_facts += 1
-    print('{} facts processed'.format(num_facts))
+    print("{} facts processed".format(num_facts))
     # Save adjacency list
-    adj_list_path = os.path.join(data_dir, 'adj_list.pkl')
-    with open(adj_list_path, 'wb') as o_f:
+    adj_list_path = os.path.join(data_dir, "adj_list.pkl")
+    with open(adj_list_path, "wb") as o_f:
         pickle.dump(dict(adj_list), o_f)
-    with open(os.path.join(data_dir, 'entity2typeid.pkl'), 'wb') as o_f:
+    with open(os.path.join(data_dir, "entity2typeid.pkl"), "wb") as o_f:
         pickle.dump(entity2typeid, o_f)
+
 
 def get_seen_queries(data_dir, entity_index_path, relation_index_path):
     entity2id, _ = load_index(entity_index_path)
     relation2id, _ = load_index(relation_index_path)
     seen_queries = set()
-    with open(os.path.join(data_dir, 'train.triples')) as f:
+    with open(os.path.join(data_dir, "train.triples")) as f:
         for line in f:
-            e1, e2, r = line.strip().split('\t')
+            e1, e2, r = line.strip().split("\t")
             e1_id = entity2id[e1]
             r_id = relation2id[r]
             seen_queries.add((e1_id, r_id))
@@ -330,10 +385,10 @@ def get_seen_queries(data_dir, entity_index_path, relation_index_path):
     seen_exps = []
     unseen_exps = []
     num_exps = 0
-    with open(os.path.join(data_dir, 'dev.triples')) as f:
+    with open(os.path.join(data_dir, "dev.triples")) as f:
         for line in f:
             num_exps += 1
-            e1, e2, r = line.strip().split('\t')
+            e1, e2, r = line.strip().split("\t")
             e1_id = entity2id[e1]
             r_id = relation2id[r]
             if (e1_id, r_id) in seen_queries:
@@ -344,15 +399,16 @@ def get_seen_queries(data_dir, entity_index_path, relation_index_path):
     num_unseen_exps = len(unseen_exps) + 0.0
     seen_ratio = num_seen_exps / num_exps
     unseen_ratio = num_unseen_exps / num_exps
-    print('Seen examples: {}/{} {}'.format(num_seen_exps, num_exps, seen_ratio))
-    print('Unseen examples: {}/{} {}'.format(num_unseen_exps, num_exps, unseen_ratio))
+    print("Seen examples: {}/{} {}".format(num_seen_exps, num_exps, seen_ratio))
+    print("Unseen examples: {}/{} {}".format(num_unseen_exps, num_exps, unseen_ratio))
 
     return seen_queries, (seen_ratio, unseen_ratio)
 
+
 def get_relations_by_type(data_dir, relation_index_path):
-    with open(os.path.join(data_dir, 'raw.kb')) as f:
+    with open(os.path.join(data_dir, "raw.kb")) as f:
         triples = list(f.readlines())
-    with open(os.path.join(data_dir, 'train.triples')) as f:
+    with open(os.path.join(data_dir, "train.triples")) as f:
         triples += list(f.readlines())
     triples = list(set(triples))
 
@@ -361,7 +417,7 @@ def get_relations_by_type(data_dir, relation_index_path):
     theta_1_to_M = 1.5
 
     for triple_str in triples:
-        e1, e2, r = triple_str.strip().split('\t')
+        e1, e2, r = triple_str.strip().split("\t")
         if not r in query_answers:
             query_answers[r] = dict()
         if not e1 in query_answers[r]:
@@ -372,14 +428,14 @@ def get_relations_by_type(data_dir, relation_index_path):
     to_1_rels = set()
 
     dev_rels = set()
-    with open(os.path.join(data_dir, 'dev.triples')) as f:
+    with open(os.path.join(data_dir, "dev.triples")) as f:
         for line in f:
-            e1, e2, r = line.strip().split('\t')
+            e1, e2, r = line.strip().split("\t")
             dev_rels.add(r)
 
     relation2id, _ = load_index(relation_index_path)
     num_rels = len(dev_rels)
-    print('{} relations in dev dataset in total'.format(num_rels))
+    print("{} relations in dev dataset in total".format(num_rels))
     for r in dev_rels:
         ratio = np.mean([len(x) for x in query_answers[r].values()])
         if ratio > theta_1_to_M:
@@ -389,16 +445,16 @@ def get_relations_by_type(data_dir, relation_index_path):
     num_to_M = len(to_M_rels) + 0.0
     num_to_1 = len(to_1_rels) + 0.0
 
-    print('to-M relations: {}/{} ({})'.format(num_to_M, num_rels, num_to_M / num_rels))
-    print('to-1 relations: {}/{} ({})'.format(num_to_1, num_rels, num_to_1 / num_rels))
+    print("to-M relations: {}/{} ({})".format(num_to_M, num_rels, num_to_M / num_rels))
+    print("to-1 relations: {}/{} ({})".format(num_to_1, num_rels, num_to_1 / num_rels))
 
     to_M_examples = []
     to_1_examples = []
     num_exps = 0
-    with open(os.path.join(data_dir, 'dev.triples')) as f:
+    with open(os.path.join(data_dir, "dev.triples")) as f:
         for line in f:
             num_exps += 1
-            e1, e2, r = line.strip().split('\t')
+            e1, e2, r = line.strip().split("\t")
             if relation2id[r] in to_M_rels:
                 to_M_examples.append(line)
             elif relation2id[r] in to_1_rels:
@@ -407,47 +463,57 @@ def get_relations_by_type(data_dir, relation_index_path):
     num_to_1_exps = len(to_1_examples) + 0.0
     to_M_ratio = num_to_M_exps / num_exps
     to_1_ratio = num_to_1_exps / num_exps
-    print('to-M examples: {}/{} ({})'.format(num_to_M_exps, num_exps, to_M_ratio))
-    print('to-1 examples: {}/{} ({})'.format(num_to_1_exps, num_exps, to_1_ratio))
+    print("to-M examples: {}/{} ({})".format(num_to_M_exps, num_exps, to_M_ratio))
+    print("to-1 examples: {}/{} ({})".format(num_to_1_exps, num_exps, to_1_ratio))
 
     return to_M_rels, to_1_rels, (to_M_ratio, to_1_ratio)
 
+
 def load_configs(args, config_path):
     with open(config_path) as f:
-        print('loading configuration file {}'.format(config_path))
+        print("loading configuration file {}".format(config_path))
         for line in f:
-            if not '=' in line:
+            if not "=" in line:
                 continue
-            arg_name, arg_value = line.strip().split('=')
+            arg_name, arg_value = line.strip().split("=")
             if arg_value.startswith('"') and arg_value.endswith('"'):
                 arg_value = arg_value[1:-1]
             if hasattr(args, arg_name):
-                print('{} = {}'.format(arg_name, arg_value))
+                print("{} = {}".format(arg_name, arg_value))
                 arg_value2 = getattr(args, arg_name)
                 if type(arg_value2) is str:
                     setattr(args, arg_name, arg_value)
                 elif type(arg_value2) is bool:
-                    if arg_value == 'True':
+                    if arg_value == "True":
                         setattr(args, arg_name, True)
-                    elif arg_value == 'False':
+                    elif arg_value == "False":
                         setattr(args, arg_name, False)
                     else:
-                        raise ValueError('Unrecognized boolean value description: {}'.format(arg_value))
+                        raise ValueError(
+                            "Unrecognized boolean value description: {}".format(
+                                arg_value
+                            )
+                        )
                 elif type(arg_value2) is int:
                     setattr(args, arg_name, int(arg_value))
                 elif type(arg_value2) is float:
                     setattr(args, arg_name, float(arg_value))
                 else:
-                    raise ValueError('Unrecognized attribute type: {}: {}'.format(arg_name, type(arg_value2)))
+                    raise ValueError(
+                        "Unrecognized attribute type: {}: {}".format(
+                            arg_name, type(arg_value2)
+                        )
+                    )
             else:
-                raise ValueError('Unrecognized argument: {}'.format(arg_name))
+                raise ValueError("Unrecognized argument: {}".format(arg_name))
     return args
+
 
 def process_qa_data(
     raw_QAPathData_path: str,
     cached_QAPathData_path: str,
     text_tokenizer: PreTrainedTokenizer,
-) :
+):
     """
     Args:
         raw_triples_loc (str) : Place where the unprocessed triples are
@@ -458,7 +524,7 @@ def process_qa_data(
 
     Data Assumptions:
         - csv file consists of 1..N columns.
-          N-1 is Question, N is Answer 
+          N-1 is Question, N is Answer
         - 1..N-2 represent the path
           These columns are organized as Entity, Relation, Entity,...
     LG: We might change this assumption to a whole graph later on:
@@ -480,7 +546,9 @@ def process_qa_data(
     ## ----------
     ## Processing
     csv_df = pd.read_csv(raw_QAPathData_path)
-    assert len(csv_df.columns) > 5, "The CSV file should have at least 5 columns. One triplet and one QA pair"
+    assert (
+        len(csv_df.columns) > 5
+    ), "The CSV file should have at least 5 columns. One triplet and one QA pair"
     question_col_idx = len(csv_df.columns) - 2
 
     ## Prepare specific triplets/path
@@ -489,7 +557,14 @@ def process_qa_data(
     num_path_cols = len(paths.columns)
 
     ## Prepare the language data
-    qna = qna.map(lambda x: str(text_tokenizer.encode(x, add_special_tokens=False)))
+    qna = qna.map(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
+    specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
+
+    repo_root = get_git_root()
+    if repo_root is None:
+        raise ValueError("Cannot get the git root path. Please make sure you are running a clone of the repo")
+    # remove prefix before git_root to get the path relative to the git root
+    specific_name = specific_name.replace(repo_root + "/", "")
 
     ## Prepare metadata for export
     # Tokenize the text by applying a pandas map function
@@ -500,14 +575,17 @@ def process_qa_data(
         "question_column": question_col_idx,
         "0-index_column": True,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_path": specific_name,
     }
 
     new_df = pd.concat([paths, qna], axis=1)
 
+    dir_name = os.path.dirname(specific_name)
+    os.makedirs(dir_name, exist_ok=True)
+
     # Hyper Parametsrs name_{value}
-    specific_name = cached_QAPathData_path.format(text_tokenizer.name_or_path,num_path_cols )
-    new_df.to_csv(specific_name, index=False)
-    with open(cached_QAPathData_path.replace(".csv", ".json"), "w") as f:
+    new_df.to_parquet(specific_name, index=False)
+    with open(specific_name.replace(".parquet", ".json"), "w") as f:
         json.dump(metadata, f)
 
     return new_df, metadata

@@ -7,8 +7,9 @@
  Customized operators and utility functions.
 """
 
-import numpy as np
+from typing import Tuple, Union, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -125,17 +126,32 @@ def var_to_numpy(x):
     return x.data.cpu().numpy()
 
 
-def pad_and_cat(a, padding_value, padding_dim=1):
+def pad_and_cat(
+    a: Union[List[torch.Tensor], torch.Tensor], padding_value, padding_dim=1
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    This is legacy code.  I belive it expects a to be a list of 2D tensors or a 3D tensor.
+    Mostly because of the specificity of operation of ConstantPad1d
+    """
     max_dim_size = max([x.size()[padding_dim] for x in a])
     padded_a = []
+    attention_mask = []
+
     for x in a:
         if x.size()[padding_dim] < max_dim_size:
             res_len = max_dim_size - x.size()[1]
             pad = nn.ConstantPad1d((0, res_len), padding_value)
             padded_a.append(pad(x))
+
+            zeros = torch.ones([x.size()[1]])
+            ones = torch.zeros([max_dim_size - x.size()[1]])
+            
+            attention_mask.append(torch.cat([zeros] + [ones], dim=0))
         else:
             padded_a.append(x)
-    return torch.cat(padded_a, dim=0)
+            attention_mask.append(torch.ones([x.size()[1]]))
+
+    return torch.cat(padded_a, dim=0), torch.stack(attention_mask)
 
 
 def rearrange_vector_list(l, offset):

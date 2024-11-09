@@ -9,8 +9,8 @@
 
 import torch
 
-import src.utils.ops as ops
-from src.utils.ops import unique_max, var_cuda, zeros_var_cuda, int_var_cuda, int_fill_var_cuda, var_to_numpy
+import multihopkg.utils.ops as ops
+from multihopkg.utils.ops import unique_max, var_cuda, zeros_var_cuda, int_var_cuda, int_fill_var_cuda, var_to_numpy
 
 
 def beam_search(pn, e_s, q, e_t, kg, num_steps, beam_size, return_path_components=False):

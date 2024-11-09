@@ -24,6 +24,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.vscode/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -114,5 +115,7 @@ temp.txt
 *.iml
 .idea
 .DS_Store
-data
 model/FB15K-237-conve-RV-xavier-200-200-0.003-32-3-0.3-0.3-0.2-0.1
+data
+data-release.tgz
+TODO.md

@@ -600,7 +600,6 @@ def run_experiment(args):
                     lf = construct_model(args)
                     lf.cuda()
                     # LFG: Training Entry 🚄
-                    pdb.set_trace()
                     train(lf)
                     metrics = inference(lf)
                     hits_at_1s[random_seed] = metrics['test']['hits_at_1']

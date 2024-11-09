@@ -11,11 +11,11 @@ from tqdm import tqdm
 
 import torch
 
-from src.emb.fact_network import get_conve_nn_state_dict, get_conve_kg_state_dict, \
+from multihopkg.emb.fact_network import get_conve_nn_state_dict, get_conve_kg_state_dict, \
     get_complex_kg_state_dict, get_distmult_kg_state_dict
-from src.rl.graph_search.pg import PolicyGradient
-import src.utils.ops as ops
-from src.utils.ops import zeros_var_cuda
+from multihopkg.rl.graph_search.pg import PolicyGradient
+import multihopkg.utils.ops as ops
+from multihopkg.utils.ops import zeros_var_cuda
 
 
 class RewardShapingPolicyGradient(PolicyGradient):

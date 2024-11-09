@@ -6,319 +6,508 @@
  
  Experiment Portal.
 """
-
-import copy
-import itertools
+import argparse
 import json
+import logging
 import os
-import random
-import sys
-from datetime import datetime
-from pathlib import Path
+from typing import List, Tuple
 
-import numpy as np
 import pandas as pd
 import torch
-# From transformers import general tokenizer
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from torch import nn
+from rich import traceback
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer, BertModel, PreTrainedTokenizer, BartConfig
 
 import multihopkg.data_utils as data_utils
-import multihopkg.eval
-from multihopkg.emb.emb import EmbeddingBasedMethod
-from multihopkg.emb.fact_network import (ComplEx, ConvE, DistMult,
-                                         get_complex_kg_state_dict,
-                                         get_conve_kg_state_dict,
-                                         get_distmult_kg_state_dict)
-from multihopkg.hyperparameter_range import hp_range
-from multihopkg.knowledge_graph import KnowledgeGraph
-# LG: This immediately parses things. A script basically.
-from multihopkg.run_configs import alpha
-from multihopkg.rl.graph_search.pg import PolicyGradient
-from multihopkg.rl.graph_search.pn import GraphSearchPolicy
-from multihopkg.rl.graph_search.rs_pg import RewardShapingPolicyGradient
-from multihopkg.utils.ops import flatten
+from multihopkg.knowledge_graph import ITLKnowledgeGraph
 from multihopkg.logging import setup_logger
+from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
+from multihopkg.rl.graph_search.pn import ITLGraphEnvironment
+from multihopkg.run_configs import alpha
 from multihopkg.utils.setup import set_seeds
-from typing import Any, Dict, Tuple
+from multihopkg.vector_search import ANN_IndexMan
+from multihopkg.environments import Observation
+from multihopkg.language_models import HunchLLM, collate_token_ids_batch
+import pdb
 
+traceback.install()
 
-def process_data(raw_triples_path: str,
-    triples_cache_loc:str,
-    text_tokenizer: PreTrainedTokenizer) \
-    -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    """
-    Args:
-        raw_triples_loc (str) : Place where the unprocessed triples are
-        triples_cache_loc (str) : Place where processed triples are
-        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the tripleshttps://www.youtube.com/watch?v=f-sRcVkZ9yg
-        text_tokenizer (AutoTokenizer) : The tokenizer for the text
-    Returns:
-    """
-    if os.path.exists(triples_cache_loc) \
-        and os.path.isfile(triples_cache_loc) \
-        and triples_cache_loc[-4] == ".csv":
-        # Then we simply load it and then exit
-        metadata = json.load(open(triples_cache_loc.replace(".csv", ".json")))
-        return pd.read_csv(triples_cache_loc), metadata
-
-        return something
-
-    ## Processing
-    csv_df = pd.read_csv(raw_triples_path)
-    columns = csv_df.columnes()
-    # Our paths will stop at  the first `question` colum
-    question_col_idx = columns.index("question")
-
-    paths = csv_df.loc[:, columns[:question_col_idx]]
-    num_path_cols = len(paths.columns)
-    text = csv_df.loc[:, columns[question_col_idx:]] # Both Q and A
-
-    # Tokenize the text by applying a pandas map function
-    text = text.apply(lambda x: text_tokenizer.encode(x, add_special_tokens=False))
-
-    # Store the metadata
-    metadata = {"tokenizer": text_tokenizer.name_or_path,
-                "num_columns": len(columns),
-                "question_column": question_col_idx,
-                "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "answer_columns": list(range(question_col_idx, len(columns))),
-                "text_columns": list(range(len(columns)))}
-
-    new_df = pd.concat([paths, text], axis=1)
-    # Save the metadata and the new processed data
-
-    # Hyper Parametsrs name_{value}
-    specific_name = Path(triples_cache_loc) \
-        / f"itl_data-tok_{text_tokenizer.name_or_path}-maxpathlen_{num_path_cols}.csv"
-    new_df.to_csv(specific_name, index=False)
-    with open(triples_cache_loc.replace(".csv", ".json"), "w") as f:
-        json.dump(metadata, f)
-
-    return new_df, metadata
-    
-    # NOTE: Their code here
-    # data_dir = args.data_dir
-    # raw_kb_path = os.path.join(data_dir, 'raw.kb')
-    # train_path = data_utils.get_train_path(args)
-    # dev_path = os.path.join(data_dir, 'dev.triples')
-    # test_path = os.path.join(data_dir, 'test.triples')
-    # data_utils.prepare_kb_envrioment(raw_kb_path, train_path, dev_path, test_path, args.test, args.add_reverse_relations)
 
 def initialize_model_directory(args, random_seed=None):
     # add model parameter info to model directory
     # TODO: We might2ant our implementation of something like this later
+    raise NotImplementedError
 
-    
-
-def construct_model(args):
-    # TODO: Get the model constructed well
-    pass
-    
-
-def train(lf):
-    train_path = data_utils.get_train_path(args)
-    dev_path = os.path.join(args.data_dir, 'dev.triples')
-    entity_index_path = os.path.join(args.data_dir, 'entity2id.txt')
-    relation_index_path = os.path.join(args.data_dir, 'relation2id.txt')
-    train_data = data_utils.load_triples(
-        train_path, entity_index_path, relation_index_path, group_examples_by_query=args.group_examples_by_query,
-        add_reverse_relations=args.add_reversed_training_edges)
-    # NELL is a dataset
-    if 'NELL' in args.data_dir:
-        adj_list_path = os.path.join(args.data_dir, 'adj_list.pkl')
-        seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
-    else:
-        seen_entities = set()
-    dev_data = data_utils.load_triples(dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities)
-    if args.checkpoint_path is not None:
-        lf.load_checkpoint(args.checkpoint_path)
-    lf.run_train(train_data, dev_data)
-
-def inference(lf):
-    lf.batch_size = args.dev_batch_size
-    lf.eval()
-    if args.model == 'hypere':
-        conve_kg_state_dict = get_conve_kg_state_dict(torch.load(args.conve_state_dict_path))
-        lf.kg.load_state_dict(conve_kg_state_dict)
-        secondary_kg_state_dict = get_complex_kg_state_dict(torch.load(args.complex_state_dict_path))
-        lf.secondary_kg.load_state_dict(secondary_kg_state_dict)
-    elif args.model == 'triplee':
-        conve_kg_state_dict = get_conve_kg_state_dict(torch.load(args.conve_state_dict_path))
-        lf.kg.load_state_dict(conve_kg_state_dict)
-        complex_kg_state_dict = get_complex_kg_state_dict(torch.load(args.complex_state_dict_path))
-        lf.secondary_kg.load_state_dict(complex_kg_state_dict)
-        distmult_kg_state_dict = get_distmult_kg_state_dict(torch.load(args.distmult_state_dict_path))
-        lf.tertiary_kg.load_state_dict(distmult_kg_state_dict)
-    else:
-        lf.load_checkpoint(get_checkpoint_path(args))
-    entity_index_path = os.path.join(args.data_dir, 'entity2id.txt')
-    relation_index_path = os.path.join(args.data_dir, 'relation2id.txt')
-    if 'NELL' in args.data_dir:
-        adj_list_path = os.path.join(args.data_dir, 'adj_list.pkl')
-        seen_entities = data_utils.load_seen_entities(adj_list_path, entity_index_path)
-    else:
-        seen_entities = set()
-
-    eval_metrics = {
-        'dev': {},
-        'test': {}
-    }
-
-    if args.compute_map:
-        relation_sets = [
-            'concept:athletehomestadium',
-            'concept:athleteplaysforteam',
-            'concept:athleteplaysinleague',
-            'concept:athleteplayssport',
-            'concept:organizationheadquarteredincity',
-            'concept:organizationhiredperson',
-            'concept:personborninlocation',
-            'concept:teamplayssport',
-            'concept:worksfor'
-        ]
-        mps = []
-        for r in relation_sets:
-            print('* relation: {}'.format(r))
-            test_path = os.path.join(args.data_dir, 'tasks', r, 'test.pairs')
-            test_data, labels = data_utils.load_triples_with_label(
-                test_path, r, entity_index_path, relation_index_path, seen_entities=seen_entities)
-            pred_scores = lf.forward(test_data, verbose=False)
-            mp = src.eval.link_MAP(test_data, pred_scores, labels, lf.kg.all_objects, verbose=True)
-            mps.append(mp)
-        map_ = np.mean(mps)
-        print('Overall MAP = {}'.format(map_))
-        eval_metrics['test']['avg_map'] = map
-    elif args.eval_by_relation_type:
-        dev_path = os.path.join(args.data_dir, 'dev.triples')
-        dev_data = data_utils.load_triples(dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities)
-        pred_scores = lf.forward(dev_data, verbose=False)
-        to_m_rels, to_1_rels, _ = data_utils.get_relations_by_type(args.data_dir, relation_index_path)
-        relation_by_types = (to_m_rels, to_1_rels)
-        print('Dev set evaluation by relation type (partial graph)')
-        src.eval.hits_and_ranks_by_relation_type(
-            dev_data, pred_scores, lf.kg.dev_objects, relation_by_types, verbose=True)
-        print('Dev set evaluation by relation type (full graph)')
-        src.eval.hits_and_ranks_by_relation_type(
-            dev_data, pred_scores, lf.kg.all_objects, relation_by_types, verbose=True)
-    elif args.eval_by_seen_queries:
-        dev_path = os.path.join(args.data_dir, 'dev.triples')
-        dev_data = data_utils.load_triples(dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities)
-        pred_scores = lf.forward(dev_data, verbose=False)
-        seen_queries = data_utils.get_seen_queries(args.data_dir, entity_index_path, relation_index_path)
-        print('Dev set evaluation by seen queries (partial graph)')
-        src.eval.hits_and_ranks_by_seen_queries(
-            dev_data, pred_scores, lf.kg.dev_objects, seen_queries, verbose=True)
-        print('Dev set evaluation by seen queries (full graph)')
-        src.eval.hits_and_ranks_by_seen_queries(
-            dev_data, pred_scores, lf.kg.all_objects, seen_queries, verbose=True)
-    else:
-        dev_path = os.path.join(args.data_dir, 'dev.triples')
-        test_path = os.path.join(args.data_dir, 'test.triples')
-        dev_data = data_utils.load_triples(
-            dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities, verbose=False)
-        test_data = data_utils.load_triples(
-            test_path, entity_index_path, relation_index_path, seen_entities=seen_entities, verbose=False)
-        print('Dev set performance:')
-        pred_scores = lf.forward(dev_data, verbose=args.save_beam_search_paths)
-        dev_metrics = src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.dev_objects, verbose=True)
-        eval_metrics['dev'] = {}
-        eval_metrics['dev']['hits_at_1'] = dev_metrics[0]
-        eval_metrics['dev']['hits_at_3'] = dev_metrics[1]
-        eval_metrics['dev']['hits_at_5'] = dev_metrics[2]
-        eval_metrics['dev']['hits_at_10'] = dev_metrics[3]
-        eval_metrics['dev']['mrr'] = dev_metrics[4]
-        src.eval.hits_and_ranks(dev_data, pred_scores, lf.kg.all_objects, verbose=True)
-        print('Test set performance:')
-        pred_scores = lf.forward(test_data, verbose=False)
-        test_metrics = src.eval.hits_and_ranks(test_data, pred_scores, lf.kg.all_objects, verbose=True)
-        eval_metrics['test']['hits_at_1'] = test_metrics[0]
-        eval_metrics['test']['hits_at_3'] = test_metrics[1]
-        eval_metrics['test']['hits_at_5'] = test_metrics[2]
-        eval_metrics['test']['hits_at_10'] = test_metrics[3]
-        eval_metrics['test']['mrr'] = test_metrics[4]
-
-    return eval_metrics
-
-
-def load_configs(config_path):
-    with open(config_path) as f:
-        print('loading configuration file {}'.format(config_path))
-        for line in f:
-            if not '=' in line:
-                continue
-            arg_name, arg_value = line.strip().split('=')
-            if arg_value.startswith('"') and arg_value.endswith('"'):
-                arg_value = arg_value[1:-1]
-            if hasattr(args, arg_name):
-                print('{} = {}'.format(arg_name, arg_value))
-                arg_value2 = getattr(args, arg_name)
-                if type(arg_value2) is str:
-                    setattr(args, arg_name, arg_value)
-                elif type(arg_value2) is bool:
-                    if arg_value == 'True':
-                        setattr(args, arg_name, True)
-                    elif arg_value == 'False':
-                        setattr(args, arg_name, False)
-                    else:
-                        raise ValueError('Unrecognized boolean value description: {}'.format(arg_value))
-                elif type(arg_value2) is int:
-                    setattr(args, arg_name, int(arg_value))
-                elif type(arg_value2) is float:
-                    setattr(args, arg_name, float(arg_value))
-                else:
-                    raise ValueError('Unrecognized attribute type: {}: {}'.format(arg_name, type(arg_value2)))
-            else:
-                raise ValueError('Unrecognized argument: {}'.format(arg_name))
-    return args
-
-
-
-
-def initial_setup():
-    # Setup Args
+def initial_setup() -> Tuple[argparse.Namespace, PreTrainedTokenizer, logging.Logger]:
+    global logger
     args = alpha.get_args()
-    args = alpha.get_args()
-    # Setup GPU
     torch.cuda.set_device(args.gpu)
-
-    # Setup Seed
     set_seeds(args.seed)
+    logger = setup_logger("__MAIN__")
 
     # Get Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
 
-    return args, tokenizer
+    assert isinstance(args, argparse.Namespace)
 
-def run_experiment(args: argparse.Namespace, tokenizer: PreTrainedTokenizer):
+    return args, tokenizer, logger
+
+def prep_questions(questions: List[torch.Tensor], model: BertModel):
+    embedded_questions = model(questions)
+    return embedded_questions
+
+
+def batch_loop(
+    env: ITLGraphEnvironment,
+    mini_batch: pd.DataFrame,  # Perhaps change this ?
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+) -> torch.Tensor:
+
+    ########################################
+    # Start the batch loop with zero grad
+    ########################################
+    nav_agent.zero_grad()
+
+    # Deconstruct the batch
+    questions = mini_batch['question'].tolist()
+    answers = mini_batch['answer'].tolist()
+    question_embeddings = env.get_llm_embeddings(questions)
+    answer_ids_padded_tensor = collate_token_ids_batch(answers).to(torch.int32)
+
+    log_probs, rewards = rollout(
+        steps_in_episode,
+        nav_agent,
+        hunch_llm,
+        env,
+        question_embeddings,
+        answer_ids_padded_tensor,
+    )
+
+    ########################################
+    # Calculate Reinforce Objective
+    ########################################
+    # Compute policy gradient
+    num_steps = len(log_probs)
+    rewards_t = torch.stack(rewards).sum(dim=1)
+    log_probs_t = torch.stack(log_probs).sum(dim=1)
+
+    pg_loss = -1*rewards_t * log_probs_t
+
+    return pg_loss
+
+
+def train_multihopkg(
+    batch_size: int,
+    epochs: int,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    learning_rate: float,
+    steps_in_episode: int,
+    env: ITLGraphEnvironment,
+    start_epoch: int,
+    train_data: pd.DataFrame,
+):
+    # TODO: Get the rollout working
+
+    # Print Model Parameters + Perhaps some more information
+    print(
+        "--------------------------\n"
+    "Model Parameters\n"
+    "--------------------------"
+    )
+    for name, param in nav_agent.named_parameters():
+        print(name, param.numel(), "requires_grad={}".format(param.requires_grad))
+
+    # Just use Adam Optimizer by default
+    optimizer = torch.optim.Adam(  # type: ignore
+        filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
+    )
+
+    for epoch_id in range(start_epoch, epochs):
+        logger.info("Epoch {}".format(epoch_id))
+        # TODO: Perhaps evaluate the epochs?
+
+        # Set in training mode
+        nav_agent.train()
+
+        # TOREM: Perhapas no need for this shuffle.
+        batch_rewards = []
+        entropies = []
+
+        # TODO: Understand if this is actually necessary here
+        # if self.run_analysis:
+        #     rewards = None
+        #     fns = None
+
+        ##############################
+        # Batch Iteration Starts Here.
+        ##############################
+        # TODO: update the parameters.
+        for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+            mini_batch = train_data[sample_offset_idx : sample_offset_idx + batch_size]
+            assert isinstance(mini_batch, pd.DataFrame) # For the lsp to give me a break
+            optimizer.zero_grad()
+            reinforce_terms = batch_loop(
+                 env, mini_batch, nav_agent, hunch_llm, steps_in_episode
+            )
+            reinforce_terms_mean = reinforce_terms.mean()
+            batch_rewards.append(reinforce_terms_mean.item())
+            reinforce_terms_mean.backward()
+
+
+            optimizer.step()
+
+            # TODO: Do something with the mini batch
+        # TODO: Check on the metrics:
+        # Check training statistics
+        # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
+        # if entropies:
+        #     stdout_msg += ' entropy = {}'.format(np.mean(entropies))
+        # print(stdout_msg)
+        # self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
+        # if self.run_analysis:
+        #     print('* Analysis: # path types seen = {}'.format(self.num_path_types))
+        #     num_hits = float(rewards.sum())
+        #     hit_ratio = num_hits / len(rewards)
+        #     print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
+        #     num_fns = float(fns.sum())
+        #     fn_ratio = num_fns / len(fns)
+        #     print('* Analysis: false negative ratio = {}'.format(fn_ratio))
+        #
+        # # Check dev set performance
+        # if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
+        #     self.eval()
+        #     self.batch_size = self.dev_batch_size
+        #     dev_scores = self.forward(dev_data, verbose=False)
+        #     print('Dev set performance: (correct evaluation)')
+        #     _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
+        #     metrics = mrr
+        #     print('Dev set performance: (include test set labels)')
+        #     src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
+        #     # Action dropout anneaking
+        #     if self.model.startswith('point'):
+        #         eta = self.action_dropout_anneal_interval
+        #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
+        #             old_action_dropout_rate = self.action_dropout_rate
+        #             self.action_dropout_rate *= self.action_dropout_anneal_factor
+        #             print('Decreasing action dropout rate: {} -> {}'.format(
+        #                 old_action_dropout_rate, self.action_dropout_rate))
+        #     # Save checkpoint
+        #     if metrics > best_dev_metrics:
+        #         self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
+        #         best_dev_metrics = metrics
+        #         with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
+        #             o_f.write('{}'.format(epoch_id))
+        #     else:
+        #         # Early stopping
+        #         if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
+        #             break
+        #     dev_metrics_history.append(metrics)
+        #     if self.run_analysis:
+        #         num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
+        #         dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
+        #         hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
+        #         fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
+        #         if epoch_id == 0:
+        #             with open(num_path_types_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'w') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #         else:
+        #             with open(num_path_types_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(self.num_path_types))
+        #             with open(dev_metrics_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(metrics))
+        #             with open(hit_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(hit_ratio))
+        #             with open(fn_ratio_file, 'a') as o_f:
+        #                 o_f.write('{}\n'.format(fn_ratio))
+        #
+        #
+
+
+def initialize_path(questions: torch.Tensor):
+    # Questions must be turned into queries
+    raise NotImplementedError
+
+
+def calculate_reward(hunch_llm: nn.Module, obtained_state: torch.Tensor, answers_ids: torch.Tensor) -> torch.Tensor:
+    """
+    Will take the answers and give an idea of how close we were.
+    This will of course require us to have a language model that will start giving us the  answer.
+    """
+    batch_size = answers_ids.size(0)
+    seq_max_len = answers_ids.size(1)
+
+    # From the obtained_state we will try to find an answer
+    answers_inf_softmax = hunch_llm(obtained_state, answers_ids)
+    # Get indices of the max value of the final output
+    answers_inf_ids = torch.argmax(answers_inf_softmax, dim=-1)
+    answers_inf_embeddings = hunch_llm.decoder_embedding(answers_inf_ids.unsqueeze(1)).reshape(batch_size, seq_max_len, -1)
+    # attempt_at_answer.shape = (batch_size, seq_len, vocab_size)
+
+    # Compare with the correct answer
+    answers_embeddings = hunch_llm.decoder_embedding(answers_ids)
+    answer_scores = torch.nn.functional.cosine_similarity(answers_inf_embeddings, answers_embeddings, dim=-1)
+    answer_score = answer_scores.mean(-1)
+
+    return answer_score
+
+def rollout(
+    # TODO: self.mdl should point to (policy network)
+    steps_in_episode,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    env: ITLGraphEnvironment,
+    questions_embeddings: torch.Tensor,
+    answers_ids: torch.Tensor,
+) -> Tuple[List[torch.Tensor], List[torch.Tensor]]: 
+    """
+    Will execute RL episode rollouts in parallel.
+    args:
+        kg: Knowledge graph environment.
+        num_steps: Number of rollout steps.
+        navigator_agent: Policy network.
+        graphman: Graph search policy network.
+        questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
+        visualize_action_probs: If set, save action probabilities for visualization.
+    returns: 
+        - log_action_probs: 
+        - action_entropy: 
+        - path_trace: 
+        - path_components:
+    """
+
+    assert steps_in_episode > 0
+
+    ########################################
+    # Prepare lists to be returned
+    ########################################
+    log_action_probs = []
+    rewards = []
+
+    # Dummy nodes ? TODO: Figur eout what they do.
+    # TODO: Perhaps here we can enter through the centroid.
+    # For now we still with these dummy
+    # NOTE: We repeat these entities until we get the right shape:
+    # TODO: make sure we keep all seen nodes up to date
+
+    # Get initial observation. A concatenation of centroid and question atm. Passed through the path encoder
+    observations = env.reset(questions_embeddings)
+    cur_position, cur_state = observations.position, observations.state
+    # Should be of shape (batch_size, 1, hidden_dim)
+
+    # pn.initialize_path(kg) # TOREM: Unecessasry to ask pn to form it for us.
+    states_so_far = []
+    for t in range(steps_in_episode):
+
+        # Ask the navigator to navigate, agent is presented state, not position
+        # State is meant to summrized path history.
+        sampled_actions, log_probs, entropies  = nav_agent(cur_state)
+
+        # TODO:Make sure we are gettign rewards from the environment.
+        observations = env.step(sampled_actions)
+
+        # For now, we use states given by the path encoder and positions mostly for debugging
+        positions, states = (observations.position, observations.state)
+        states_so_far.append(states)
+
+        ########################################
+        # Calculate the Reward
+        ########################################
+        stacked_states = torch.stack(states_so_far).permute(1,0,2)
+        similarity_scores = calculate_reward(hunch_llm, stacked_states, answers_ids)
+        rewards.append(similarity_scores)
+
+        # TODO: Make obseervations not rely on the question
+
+        ########################################
+        # Log Stuff for across batch
+        ########################################
+        log_action_probs.append(log_probs)
+
+        # pn.update_path(action, kg) # TODO: Confirm this is actually needed
+        # action_prob = sample_outcome["action_prob"]
+        # log_action_probs.append(ops.safe_log(action_prob)) # TODO: Compute this again ( if necessary)
+        # action_entropy.append(policy_entropy) # TOREM: Comes from `transit` not sure if I shoudl remove it
+        # TODO: Calculate next cur_observation
+        
+        # TODO: Is this somethign we want?
+        # if visualize_action_probs:
+        #     top_k_action = sample_outcome["top_actions"]
+        #     top_k_action_prob = sample_outcome["top_action_probs"]
+        #     path_components.append((e, top_k_action, top_k_action_prob))
+        
+    return log_action_probs, rewards
+
+def load_qa_data(cached_metadata_path: str, raw_QAData_path, tokenizer_name: str):
+    if os.path.exists(cached_metadata_path):
+        logger.info(
+            f"\033[93m Found cache for the QA data {cached_metadata_path} will load it instead of working on {raw_QAData_path}. \033[0m"
+        )
+        # Read the first line of the raw csv to count the number of columns
+        train_metadata = json.load(open(cached_metadata_path))
+        cached_csv_data_path = train_metadata["saved_path"]
+        train_df = pd.read_parquet(cached_csv_data_path)
+        # Ensure that we are not reading them integers as strings, but also not as floats
+        logger.info(f"Loaded cached data from \033[93m\033[4m{json.dumps(cached_metadata_path,indent=4)} \033[0m")
+    else:
+        logger.info(
+            f"\033[93m Did not find cache for the QA data {cached_metadata_path}. Will now process it from {raw_QAData_path} \033[0m"
+        )
+        text_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        train_df, train_metadata = data_utils.process_qa_data( #TOREM: Same here, might want to remove if not really used
+            raw_QAData_path,
+            cached_metadata_path,
+            text_tokenizer,
+        )
+        logger.info(f"Done. Result dumped at : \n\033[93m\033[4m{train_metadata['saved_path']}\033[0m")
+    return train_df, train_metadata
+
+def main():
     # By default we run the config
     # Process data will determine by itself if there is any data to process
-    process_data(args.QAtriplets_raw_dir, args.QAtriplets_cache_dir, tokenizer)
+    args, tokenizer, logger = initial_setup()
 
-    # TODO: Maybe re-enable this logic later
-    # with torch.set_grad_enabled(args.train or args.search_random_seed or args.grid_search):
+    # TODO: Muybe ? (They use it themselves)
+    # initialize_model_directory(args, args.seed)
+
+    ## Agent needs a Knowledge graph as well as the environment
+    logger.info(":: Setting up the knowledge graph")
+    knowledge_graph = ITLKnowledgeGraph(
+        data_dir=args.data_dir,
+        model=args.model,
+        emb_dropout_rate=args.emb_dropout_rate,
+        use_action_space_bucketing=args.use_action_space_bucketing,
+        pretrained_embedding_type=args.pretrained_embedding_type,
+        pretrained_embedding_weights_path=args.pretrained_embedding_weights_path,
+    )
+
+    # Information computed by knowldege graph for future dependency injection
+    dim_entity = knowledge_graph.get_entity_dim()
+    dim_relation = knowledge_graph.get_relation_dim()
+    logger.info("You have reached the exit")
+
+    # Get the Module for Approximate Nearest Neighbor Search
+    ########################################
+    # Setup the ann index. 
+    # Will be needed for obtaining observations.
+    ########################################
+    logger.info(":: Setting up the ANN Index") 
+    ann_index_manager = ANN_IndexMan(
+        knowledge_graph.get_all_entity_embeddings_wo_dropout(),
+        exact_computation=False,
+        nlist=100,
+    )
+
+    # Setup the pretrained language model
+    logger.info(":: Setting up the pretrained language model")
+    config = BartConfig.from_pretrained("facebook/bart-base")
+    # Access the hidden size (hidden dimension)
+    bart_padding_token_id = config.pad_token_id
+    # TODO: Remove the hardcode. Perhaps 
+    embedding_hidden_size = config.d_model
+    embedding_vocab_size = config.vocab_size
+    print(f"The hidden dimension of the embedding layer is {embedding_hidden_size} and its vocab size is {embedding_vocab_size}") 
+    hunch_llm = HunchLLM(
+        pretrained_transformer_weights_path = args.pretrained_llm_transformer_ckpnt_path,
+        xattn_left_dim = args.history_dim,
+        llm_model_dim = args.llm_model_dim,
+        llm_num_heads = args.llm_num_heads,
+        llm_num_layers = args.llm_num_layers,
+        llm_ff_dim = args.llm_ff_dim,
+        llm_max_seq_length = args.max_seq_length,
+        xattn_left_max_seq_length = args.steps_in_episode,
+        dropout = args.llm_dropout_rate,
+        embedding_padding_id = bart_padding_token_id,
+        embedding_dim = embedding_hidden_size,
+        embedding_vocab_size = embedding_vocab_size,
+    )
+    if args.further_train_hunchs_llm:
+        # TODO: Ensure we dont have to freeze the model for this.
+        hunch_llm.freeze_llm()
+
+    # Setup the entity embedding module
+    question_embedding_module = AutoModel.from_pretrained(args.question_embedding_model)
+    # Setting up the models
+    logger.info(":: Setting up the environment")
+    env = ITLGraphEnvironment(
+        question_embedding_module=question_embedding_module,
+        question_embedding_module_trainable=args.question_embedding_module_trainable,
+        entity_dim=dim_entity,
+        ff_dropout_rate=args.ff_dropout_rate,
+        history_dim=args.history_dim,
+        history_num_layers=args.history_num_layers,
+        knowledge_graph=knowledge_graph,
+        relation_dim=dim_relation,
+        ann_index_manager=ann_index_manager,
+        steps_in_episode=args.num_rollout_steps
+    )
+
+    # Now we load this from the embedding models
+
+    # TODO: Reorganizew the parameters lol
+    logger.info(":: Setting up the navigation agent")
+    nav_agent = ContinuousPolicyGradient(
+        baseline=args.baseline,
+        beta=args.beta,
+        gamma=args.gamma,
+        action_dropout_rate=args.action_dropout_rate,
+        action_dropout_anneal_factor=args.action_dropout_anneal_factor,
+        action_dropout_anneal_interval=args.action_dropout_anneal_interval,
+        num_rollout_steps=args.num_rollout_steps,
+        dim_action=dim_relation,
+        dim_hidden=args.rnn_hidden,
+        dim_observation=args.history_dim, # observation will be into history
+    )
 
 
-    o_f = open(out_log, 'a')
+    # TODO: Add checkpoint support
+    # See args.start_epoch
 
-    random_seed = random.randint(0, 1e16)
+    ########################################
+    # Get the data
+    ########################################
+    logger.info(":: Setting up the data")
+    train_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
 
-    torch.manual_seed(random_seed)
+    # TODO: Load the validation data
+    # dev_path = os.path.join(args.data_dir, "dev.triples")
+    # dev_data = data_utils.load_triples(
+    #     dev_path, entity_index_path, relation_index_path, seen_entities=seen_entities
+    # )
+    # TODO: Make it take check for a checkpoint and decide what start_epoch
+    # if args.checkpoint_path is not None:
+    #     # TODO: Add it here to load the checkpoint separetely
+    #     nav_agent.load_checkpoint(args.checkpoint_path)
 
-    torch.cuda.manual_seed_all(args, random_seed)
-
-    initialize_model_directory(args, random_seed)
-
-    # TODO: 
-    lf = construct_model(args)
-    lf.cuda()
-
-    # TODO: LFG: Training Entry 🚄
-    train(lf)
-
+    ######## ######## ########
+    # Train:
+    ######## ######## ########
+    start_epoch = 0
+    logger.info(":: Training the model")
+    train_multihopkg(
+        batch_size = args.batch_size,
+        epochs = args.epochs,
+        nav_agent = nav_agent,
+        hunch_llm = hunch_llm,
+        learning_rate = args.learning_rate,
+        steps_in_episode = args.num_rollout_steps,
+        env = env, 
+        start_epoch = args.start_epoch,
+        train_data = train_df
+    )
 
     # TODO: Evaluation of the model
-    metrics = inference(lf)
+    # metrics = inference(lf)
 
-if __name__ == '__main__':
-    args, tokenizer = initial_setup()
-    run_experiment(args, tokenizer)
+
+if __name__ == "__main__":
+    main(),
