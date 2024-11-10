@@ -7,6 +7,7 @@
  Graph Search Policy Network.
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -535,7 +536,7 @@ class ITLGraphEnvironment(Environment):
             )
         )
 
-    def get_llm_embeddings(self, questions: List[torch.Tensor]) -> torch.Tensor:
+    def get_llm_embeddings(self, questions: List[np.ndarray]) -> torch.Tensor:
         """
         Will take a list of list of token ids, pad them and then pass them to the embedding module to get single embeddings for each question
         Args:
@@ -553,7 +554,7 @@ class ITLGraphEnvironment(Environment):
 
         # Format the input for the legacy funciton inside
         tensorized_questions = [
-            torch.from_numpy(q).to(torch.int32).view(1, -1) for q in questions
+            torch.tensor(q).to(torch.int32).view(1, -1) for q in questions
         ]
         # We should conver them to embeddinggs before sending them over
 
