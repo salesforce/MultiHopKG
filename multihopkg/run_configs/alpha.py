@@ -66,6 +66,7 @@ def get_args() -> argparse.Namespace:
     ap.add_argument("--llm_ff_dropout_rate", default=0.1)
     ap.add_argument("--llm_dropout_rate", default=0.1)
     ap.add_argument("--max_seq_length", default=1024)
+    ap.add_argument('--batches_b4_eval', type=int, default=1, help='Number of batches to run before evaluation (default: 100)')
 
 
     # NOTE: Legacy Parameters

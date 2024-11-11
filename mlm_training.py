@@ -18,6 +18,7 @@ from torch import nn
 from rich import traceback
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer, BertModel, PreTrainedTokenizer, BartConfig
+from sklearn.model_selection import train_test_split
 
 import multihopkg.data_utils as data_utils
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
@@ -57,6 +58,50 @@ def prep_questions(questions: List[torch.Tensor], model: BertModel):
     embedded_questions = model(questions)
     return embedded_questions
 
+
+def batch_loop_dev(
+    env: ITLGraphEnvironment,
+    mini_batch: pd.DataFrame,  # Perhaps change this ?
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+) -> torch.Tensor:
+    """
+    Specifically for computing any extra metrics on the dev set.
+    Otherwise, this is the same as `batch_loop`.
+    """
+
+    ########################################
+    # Start the batch loop with zero grad
+    ########################################
+    nav_agent.zero_grad()
+
+    # Deconstruct the batch
+    questions = mini_batch['question'].tolist()
+    answers = mini_batch['answer'].tolist()
+    question_embeddings = env.get_llm_embeddings(questions)
+    answer_ids_padded_tensor = collate_token_ids_batch(answers).to(torch.int32)
+
+    log_probs, rewards = rollout(
+        steps_in_episode,
+        nav_agent,
+        hunch_llm,
+        env,
+        question_embeddings,
+        answer_ids_padded_tensor,
+    )
+
+    ########################################
+    # Calculate Reinforce Objective
+    ########################################
+    # Compute policy gradient
+    num_steps = len(log_probs)
+    rewards_t = torch.stack(rewards).sum(dim=1)
+    log_probs_t = torch.stack(log_probs).sum(dim=1)
+
+    pg_loss = -1*rewards_t * log_probs_t
+
+    return pg_loss
 
 def batch_loop(
     env: ITLGraphEnvironment,
@@ -99,6 +144,39 @@ def batch_loop(
     return pg_loss
 
 
+def evaluate_training(
+    env: ITLGraphEnvironment,
+    dev_df: pd.DataFrame,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+    batch_size: int
+):
+
+    num_batches = len(dev_df) // batch_size
+    nav_agent.eval()
+    hunch_llm.eval()
+
+    metrics = dict()
+
+    for batch_id in range(num_batches):
+        # TODO: Get the rollout working
+        mini_batch = dev_df[batch_id*batch_size:(batch_id+1)*batch_size]
+        if not isinstance(mini_batch, pd.DataFrame): # For the lsp to give me a break
+            raise RuntimeError(f"The mini batch is not a pd.DataFrame, but a {type(mini_batch)}. Please check the data loading code.")
+        if len(mini_batch) < batch_size: # We dont want to evaluate on incomplete batches
+            continue
+
+        pg_loss = batch_loop_dev(
+            env, mini_batch, nav_agent, hunch_llm, steps_in_episode
+        )
+
+    # Average out all metrics in side metrics
+    for k,v in metrics.items():
+        metrics[k] = v / num_batches    
+
+    # TODO: Implement this
+
 def train_multihopkg(
     batch_size: int,
     epochs: int,
@@ -109,6 +187,8 @@ def train_multihopkg(
     env: ITLGraphEnvironment,
     start_epoch: int,
     train_data: pd.DataFrame,
+    dev_df: pd.DataFrame,
+    mbatches_b4_eval: int,
 ):
     # TODO: Get the rollout working
 
@@ -125,6 +205,8 @@ def train_multihopkg(
     optimizer = torch.optim.Adam(  # type: ignore
         filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
     )
+
+    batch_evaluation_counter = 0
 
     for epoch_id in range(start_epoch, epochs):
         logger.info("Epoch {}".format(epoch_id))
@@ -147,6 +229,9 @@ def train_multihopkg(
         ##############################
         # TODO: update the parameters.
         for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+            ########################################
+            # Training
+            ########################################
             mini_batch = train_data[sample_offset_idx : sample_offset_idx + batch_size]
             assert isinstance(mini_batch, pd.DataFrame) # For the lsp to give me a break
             optimizer.zero_grad()
@@ -156,81 +241,19 @@ def train_multihopkg(
             reinforce_terms_mean = reinforce_terms.mean()
             batch_rewards.append(reinforce_terms_mean.item())
             reinforce_terms_mean.backward()
-
-
             optimizer.step()
 
-            # TODO: Do something with the mini batch
-        # TODO: Check on the metrics:
-        # Check training statistics
-        # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
-        # if entropies:
-        #     stdout_msg += ' entropy = {}'.format(np.mean(entropies))
-        # print(stdout_msg)
-        # self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
-        # if self.run_analysis:
-        #     print('* Analysis: # path types seen = {}'.format(self.num_path_types))
-        #     num_hits = float(rewards.sum())
-        #     hit_ratio = num_hits / len(rewards)
-        #     print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
-        #     num_fns = float(fns.sum())
-        #     fn_ratio = num_fns / len(fns)
-        #     print('* Analysis: false negative ratio = {}'.format(fn_ratio))
-        #
-        # # Check dev set performance
-        # if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
-        #     self.eval()
-        #     self.batch_size = self.dev_batch_size
-        #     dev_scores = self.forward(dev_data, verbose=False)
-        #     print('Dev set performance: (correct evaluation)')
-        #     _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
-        #     metrics = mrr
-        #     print('Dev set performance: (include test set labels)')
-        #     src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
-        #     # Action dropout anneaking
-        #     if self.model.startswith('point'):
-        #         eta = self.action_dropout_anneal_interval
-        #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
-        #             old_action_dropout_rate = self.action_dropout_rate
-        #             self.action_dropout_rate *= self.action_dropout_anneal_factor
-        #             print('Decreasing action dropout rate: {} -> {}'.format(
-        #                 old_action_dropout_rate, self.action_dropout_rate))
-        #     # Save checkpoint
-        #     if metrics > best_dev_metrics:
-        #         self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
-        #         best_dev_metrics = metrics
-        #         with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
-        #             o_f.write('{}'.format(epoch_id))
-        #     else:
-        #         # Early stopping
-        #         if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
-        #             break
-        #     dev_metrics_history.append(metrics)
-        #     if self.run_analysis:
-        #         num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
-        #         dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
-        #         hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
-        #         fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
-        #         if epoch_id == 0:
-        #             with open(num_path_types_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(self.num_path_types))
-        #             with open(dev_metrics_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(metrics))
-        #             with open(hit_ratio_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(hit_ratio))
-        #             with open(fn_ratio_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(fn_ratio))
-        #         else:
-        #             with open(num_path_types_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(self.num_path_types))
-        #             with open(dev_metrics_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(metrics))
-        #             with open(hit_ratio_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(hit_ratio))
-        #             with open(fn_ratio_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(fn_ratio))
-        #
-        #
+            ########################################
+            # Evaluation 
+            ########################################
+            logger.warn("Entering evaluation")
+            batch_evaluation_counter += 1
+            if batch_evaluation_counter >= mbatches_b4_eval:
+                evaluate_training(env, dev_df, nav_agent, hunch_llm, steps_in_episode, batch_size)
+                batch_evaluation_counter = 0
+
+
+
 
 
 def initialize_path(questions: torch.Tensor):
@@ -279,10 +302,8 @@ def rollout(
         questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
         visualize_action_probs: If set, save action probabilities for visualization.
     returns: 
-        - log_action_probs: 
-        - action_entropy: 
-        - path_trace: 
-        - path_components:
+        - log_action_probs (torch.TEnsor): For REINFORCE 
+        - rewards (torch.Tensor):  I mean, also for REINFOCE
     """
 
     assert steps_in_episode > 0
@@ -369,7 +390,16 @@ def load_qa_data(cached_metadata_path: str, raw_QAData_path, tokenizer_name: str
             text_tokenizer,
         )
         logger.info(f"Done. Result dumped at : \n\033[93m\033[4m{train_metadata['saved_path']}\033[0m")
-    return train_df, train_metadata
+
+    ########################################
+    # Train Validation Test split
+    ########################################
+
+    # Shuffle the Questions
+    shuffled_train_df = train_df.sample(frac=1).reset_index(drop=True)
+    train_df, val_df = train_test_split(shuffled_train_df, test_size=0.2, random_state=42)
+
+    return train_df, val_df, train_metadata
 
 def main():
     # By default we run the config
@@ -476,7 +506,9 @@ def main():
     # Get the data
     ########################################
     logger.info(":: Setting up the data")
-    train_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
+    train_df,dev_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
+    if not isinstance(dev_df, pd.DataFrame) or not isinstance(train_df, pd.DataFrame):
+        raise RuntimeError("The data was not loaded properly. Please check the data loading code.")
 
     # TODO: Load the validation data
     # dev_path = os.path.join(args.data_dir, "dev.triples")
@@ -502,7 +534,9 @@ def main():
         steps_in_episode = args.num_rollout_steps,
         env = env, 
         start_epoch = args.start_epoch,
-        train_data = train_df
+        train_data = train_df,
+        dev_df = dev_df,
+        mbatches_b4_eval = args.batches_b4_eval,
     )
 
     # TODO: Evaluation of the model
