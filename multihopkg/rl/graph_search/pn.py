@@ -480,7 +480,7 @@ class GraphSearchPolicy(nn.Module):
                     nn.init.xavier_normal_(param)
 
 
-class ITLGraphEnvironment(Environment):
+class ITLGraphEnvironment(Environment, nn.Module):
 
     def __init__(
         self,
@@ -495,11 +495,10 @@ class ITLGraphEnvironment(Environment):
         ann_index_manager: ANN_IndexMan,
         steps_in_episode: int
     ):
+        super(ITLGraphEnvironment, self).__init__()
         # Should be injected via information extracted from Knowledge Grap
         self.action_dim = relation_dim  # TODO: Ensure this is a solid default
-        self.question_embedding_module = question_embedding_module
         self.question_embedding_module_trainable = question_embedding_module_trainable
-        self.question_dim = self.question_embedding_module.config.hidden_size
         self.entity_dim = entity_dim
         self.ff_dropout_rate = ff_dropout_rate
         self.history_dim = history_dim  # History is STATE
@@ -513,6 +512,7 @@ class ITLGraphEnvironment(Environment):
         self.ann_index_manager = ann_index_manager
         self.steps_in_episode = steps_in_episode
 
+
         ########################################
         # Core States (4/5)
         ########################################
@@ -524,6 +524,13 @@ class ITLGraphEnvironment(Environment):
         # Get the actual torch modules defined
         # Of most importance is self.path_encoder
         ########################################
+        assert isinstance(
+            question_embedding_module, nn.Module
+        ), "The question embedding module must be a torch.nn.Module, otherwis no computation graph. You passed a {}".format(
+            type(question_embedding_module)
+        )
+        self.question_embedding_module = question_embedding_module
+        self.question_dim = self.question_embedding_module.config.hidden_size
         # (self.W1, self.W2, self.W1Dropout, self.W2Dropout, self.path_encoder, self.concat_projector) = (
         (self.concat_projector, self.W2, self.W1Dropout, self.W2Dropout, _) = (
             self._define_modules(
@@ -536,6 +543,7 @@ class ITLGraphEnvironment(Environment):
             )
         )
 
+
     def get_llm_embeddings(self, questions: List[np.ndarray]) -> torch.Tensor:
         """
         Will take a list of list of token ids, pad them and then pass them to the embedding module to get single embeddings for each question
@@ -544,14 +552,6 @@ class ITLGraphEnvironment(Environment):
         Return:
             - questions_embeddings (torch.Tensor): The embeddings of the questions.
         """
-        if self.question_embedding_module_trainable:
-            self.question_embedding_module.train()
-        else:
-            self.question_embedding_module.eval()
-
-        # Questions are of oshape List[torch.Tensor] This can be converted to -> List[torch[int]] where the inner torch is of different values
-        # Then we can Imagine this to be a td concatenation where We have a single 1
-
         # Format the input for the legacy funciton inside
         tensorized_questions = [
             torch.tensor(q).to(torch.int32).view(1, -1) for q in questions

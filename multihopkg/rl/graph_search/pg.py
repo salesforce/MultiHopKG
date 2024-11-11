@@ -69,7 +69,7 @@ class PolicyGradient(LFramework):
             num_epochs,
             num_wait_epochs,
             num_peek_epochs,
-           learning_rate,
+            learning_rate,
             grad_norm,
             adam_beta1,
             adam_beta2,

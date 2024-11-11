@@ -43,6 +43,9 @@ from multihopkg.vector_search import ANN_IndexMan
 traceback.install()
 wandb_run = None
 
+# TODO: Remove before final realease, this is purely for debugging
+in_dev_mode = False
+
 
 def initialize_model_directory(args, random_seed=None):
     # add model parameter info to model directory
@@ -91,6 +94,7 @@ def batch_loop_dev(
     question_embeddings = env.get_llm_embeddings(questions)
     answer_ids_padded_tensor = collate_token_ids_batch(answers).to(torch.int32)
 
+    logger.warn(f"About to go into rollout")
     log_probs, rewards = rollout(
         steps_in_episode,
         nav_agent,
@@ -103,12 +107,18 @@ def batch_loop_dev(
     ########################################
     # Calculate Reinforce Objective
     ########################################
+    logger.warn(f"We just left dev rollout")
     # Compute policy gradient
-    num_steps = len(log_probs)
     rewards_t = torch.stack(rewards).sum(dim=1)
     log_probs_t = torch.stack(log_probs).sum(dim=1)
 
-    pg_loss = -1*rewards_t * log_probs_t
+    assert (
+        not torch.isnan(rewards_t).any() and not torch.isnan(log_probs_t).any()
+    ), "NaN detected in the rewards or log probs (batch_loop_dev). Aborting training."
+
+    pg_loss = -1 * rewards_t * log_probs_t
+
+    logger.info(f"Does pg_loss require grad? {pg_loss.requires_grad}")
 
     return pg_loss
 
@@ -163,26 +173,37 @@ def evaluate_training(
     batch_count: int
 ):
 
+    global in_dev_mode
     num_batches = len(dev_df) // batch_size
     nav_agent.eval()
     hunch_llm.eval()
+    in_dev_mode = True  # TOREM: This is only for debugging
+    env.eval()
+    # env.question_embedding_module.eval()
+    assert (
+        not env.question_embedding_module.training
+    ), "The question embedding module must not be in training mode"
 
     metrics = {
         "dev/batch_count": [batch_count],
         "dev/pg_loss": []
     }
 
-    for batch_id in range(num_batches):
-        # TODO: Get the rollout working
-        mini_batch = dev_df[batch_id*batch_size:(batch_id+1)*batch_size]
-        if not isinstance(mini_batch, pd.DataFrame): # For the lsp to give me a break
-            raise RuntimeError(f"The mini batch is not a pd.DataFrame, but a {type(mini_batch)}. Please check the data loading code.")
-        if len(mini_batch) < batch_size: # We dont want to evaluate on incomplete batches
-            continue
+    with torch.no_grad():
+        for batch_id in range(num_batches):
+            # TODO: Get the rollout working
+            mini_batch = dev_df[batch_id*batch_size:(batch_id+1)*batch_size]
+            if not isinstance(mini_batch, pd.DataFrame): # For the lsp to give me a break
+                raise RuntimeError(f"The mini batch is not a pd.DataFrame, but a {type(mini_batch)}. Please check the data loading code.")
+            if len(mini_batch) < batch_size: # We dont want to evaluate on incomplete batches
+                continue
 
-        pg_loss = batch_loop_dev(
-            env, mini_batch, nav_agent, hunch_llm, steps_in_episode
-        )
+            pg_loss = batch_loop_dev(
+                env, mini_batch, nav_agent, hunch_llm, steps_in_episode
+            )
+            logger.info("Finishing inner looop of batch")
+            metrics['dev/pg_loss'].append(pg_loss.mean().item())
+        logger.info("Done with all batches")
 
     # Average out all metrics in side metrics
     for k,v in metrics.items():
@@ -191,6 +212,11 @@ def evaluate_training(
     if wandb_run is not None:
         wandb_run.log(metrics)
 
+    nav_agent.train()
+    hunch_llm.train()
+    env.train()
+    dev_mode = False
+    logger.info("Done with Evaluation")
     # TODO: Implement this
 
 def train_multihopkg(
@@ -248,10 +274,14 @@ def train_multihopkg(
             mini_batch = train_data[sample_offset_idx : sample_offset_idx + batch_size]
             assert isinstance(mini_batch, pd.DataFrame) # For the lsp to give me a break
             optimizer.zero_grad()
-            reinforce_terms = batch_loop(
+            pg_loss = batch_loop(
                  env, mini_batch, nav_agent, hunch_llm, steps_in_episode
             )
-            reinforce_terms_mean = reinforce_terms.mean()
+            if torch.isnan(pg_loss).any():
+                logger.error("NaN detected in the loss. Aborting training.")
+                pdb.set_trace()
+            reinforce_terms_mean = pg_loss.mean()
+
             batch_rewards.append(reinforce_terms_mean.item())
             reinforce_terms_mean.backward()
             optimizer.step()
@@ -365,6 +395,9 @@ def rollout(
         ########################################
         # Log Stuff for across batch
         ########################################
+        logger.warn(f"Am I in dev mode? {in_dev_mode}")
+        if in_dev_mode:
+            logger.debug("In dev mode. Stopppinng before preprending log_probs")
         log_action_probs.append(log_probs)
 
         # pn.update_path(action, kg) # TODO: Confirm this is actually needed
@@ -562,6 +595,7 @@ def main():
         dev_df = dev_df,
         mbatches_b4_eval = args.batches_b4_eval,
     )
+    logger.info("Done with everything. Exiting...")
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)
