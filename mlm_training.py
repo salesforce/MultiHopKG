@@ -10,29 +10,38 @@ import argparse
 import json
 import logging
 import os
+import pdb
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
-from torch import nn
+import wandb
 from rich import traceback
-from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer, BertModel, PreTrainedTokenizer, BartConfig
 from sklearn.model_selection import train_test_split
+from torch import nn
+from tqdm import tqdm
+from transformers import (
+    AutoModel,
+    AutoTokenizer,
+    BartConfig,
+    BertModel,
+    PreTrainedTokenizer,
+)
 
 import multihopkg.data_utils as data_utils
+from multihopkg.environments import Observation
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
+from multihopkg.language_models import HunchLLM, collate_token_ids_batch
 from multihopkg.logging import setup_logger
 from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
 from multihopkg.rl.graph_search.pn import ITLGraphEnvironment
 from multihopkg.run_configs import alpha
 from multihopkg.utils.setup import set_seeds
 from multihopkg.vector_search import ANN_IndexMan
-from multihopkg.environments import Observation
-from multihopkg.language_models import HunchLLM, collate_token_ids_batch
-import pdb
 
 traceback.install()
+wandb_run = None
 
 
 def initialize_model_directory(args, random_seed=None):
@@ -150,14 +159,18 @@ def evaluate_training(
     nav_agent: ContinuousPolicyGradient,
     hunch_llm: nn.Module,
     steps_in_episode: int,
-    batch_size: int
+    batch_size: int,
+    batch_count: int
 ):
 
     num_batches = len(dev_df) // batch_size
     nav_agent.eval()
     hunch_llm.eval()
 
-    metrics = dict()
+    metrics = {
+        "dev/batch_count": [batch_count],
+        "dev/pg_loss": []
+    }
 
     for batch_id in range(num_batches):
         # TODO: Get the rollout working
@@ -173,7 +186,10 @@ def evaluate_training(
 
     # Average out all metrics in side metrics
     for k,v in metrics.items():
-        metrics[k] = v / num_batches    
+        metrics[k] = np.mean(v)
+
+    if wandb_run is not None:
+        wandb_run.log(metrics)
 
     # TODO: Implement this
 
@@ -206,26 +222,23 @@ def train_multihopkg(
         filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
     )
 
-    batch_evaluation_counter = 0
+    # Variable to pass for logging
+    batch_count = 0
 
+    ########################################
+    # Epoch Loop
+    ########################################
     for epoch_id in range(start_epoch, epochs):
         logger.info("Epoch {}".format(epoch_id))
         # TODO: Perhaps evaluate the epochs?
 
         # Set in training mode
         nav_agent.train()
-
-        # TOREM: Perhapas no need for this shuffle.
         batch_rewards = []
         entropies = []
 
-        # TODO: Understand if this is actually necessary here
-        # if self.run_analysis:
-        #     rewards = None
-        #     fns = None
-
         ##############################
-        # Batch Iteration Starts Here.
+        # Batch Loop
         ##############################
         # TODO: update the parameters.
         for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
@@ -243,14 +256,14 @@ def train_multihopkg(
             reinforce_terms_mean.backward()
             optimizer.step()
 
+            batch_count += 1 
+
             ########################################
             # Evaluation 
             ########################################
             logger.warn("Entering evaluation")
-            batch_evaluation_counter += 1
-            if batch_evaluation_counter >= mbatches_b4_eval:
-                evaluate_training(env, dev_df, nav_agent, hunch_llm, steps_in_episode, batch_size)
-                batch_evaluation_counter = 0
+            if batch_count % mbatches_b4_eval == 0:
+                evaluate_training(env, dev_df, nav_agent, hunch_llm, steps_in_episode, batch_size, batch_count)
 
 
 
@@ -405,9 +418,20 @@ def main():
     # By default we run the config
     # Process data will determine by itself if there is any data to process
     args, tokenizer, logger = initial_setup()
+    global wandb_run
 
     # TODO: Muybe ? (They use it themselves)
     # initialize_model_directory(args, args.seed)
+    if args.wandb:
+        logger.info(
+            f"🪄 Initializing Weights and Biases. Under project name {args.wandb_project_name} and run name {args.wr_name}"
+        )
+        wandb_run = wandb.init(
+            project=args.wandb_project_name,
+            name=args.wr_name,
+            config=vars(args),
+            notes=args.wr_notes,
+        )
 
     ## Agent needs a Knowledge graph as well as the environment
     logger.info(":: Setting up the knowledge graph")
