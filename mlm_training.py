@@ -10,28 +10,41 @@ import argparse
 import json
 import logging
 import os
+import pdb
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
-from torch import nn
+import wandb
 from rich import traceback
+from sklearn.model_selection import train_test_split
+from torch import nn
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer, BertModel, PreTrainedTokenizer, BartConfig
+from transformers import (
+    AutoModel,
+    AutoTokenizer,
+    BartConfig,
+    BertModel,
+    PreTrainedTokenizer,
+)
 
 import multihopkg.data_utils as data_utils
+from multihopkg.environments import Observation
 from multihopkg.knowledge_graph import ITLKnowledgeGraph
+from multihopkg.language_models import HunchLLM, collate_token_ids_batch
 from multihopkg.logging import setup_logger
 from multihopkg.rl.graph_search.cpg import ContinuousPolicyGradient
 from multihopkg.rl.graph_search.pn import ITLGraphEnvironment
 from multihopkg.run_configs import alpha
 from multihopkg.utils.setup import set_seeds
 from multihopkg.vector_search import ANN_IndexMan
-from multihopkg.environments import Observation
-from multihopkg.language_models import HunchLLM, collate_token_ids_batch
-import pdb
 
 traceback.install()
+wandb_run = None
+
+# TODO: Remove before final realease, this is purely for debugging
+in_dev_mode = False
 
 
 def initialize_model_directory(args, random_seed=None):
@@ -57,6 +70,57 @@ def prep_questions(questions: List[torch.Tensor], model: BertModel):
     embedded_questions = model(questions)
     return embedded_questions
 
+
+def batch_loop_dev(
+    env: ITLGraphEnvironment,
+    mini_batch: pd.DataFrame,  # Perhaps change this ?
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+) -> torch.Tensor:
+    """
+    Specifically for computing any extra metrics on the dev set.
+    Otherwise, this is the same as `batch_loop`.
+    """
+
+    ########################################
+    # Start the batch loop with zero grad
+    ########################################
+    nav_agent.zero_grad()
+
+    # Deconstruct the batch
+    questions = mini_batch['question'].tolist()
+    answers = mini_batch['answer'].tolist()
+    question_embeddings = env.get_llm_embeddings(questions)
+    answer_ids_padded_tensor = collate_token_ids_batch(answers).to(torch.int32)
+
+    logger.warn(f"About to go into rollout")
+    log_probs, rewards = rollout(
+        steps_in_episode,
+        nav_agent,
+        hunch_llm,
+        env,
+        question_embeddings,
+        answer_ids_padded_tensor,
+    )
+
+    ########################################
+    # Calculate Reinforce Objective
+    ########################################
+    logger.warn(f"We just left dev rollout")
+    # Compute policy gradient
+    rewards_t = torch.stack(rewards).sum(dim=1)
+    log_probs_t = torch.stack(log_probs).sum(dim=1)
+
+    assert (
+        not torch.isnan(rewards_t).any() and not torch.isnan(log_probs_t).any()
+    ), "NaN detected in the rewards or log probs (batch_loop_dev). Aborting training."
+
+    pg_loss = -1 * rewards_t * log_probs_t
+
+    logger.info(f"Does pg_loss require grad? {pg_loss.requires_grad}")
+
+    return pg_loss
 
 def batch_loop(
     env: ITLGraphEnvironment,
@@ -99,6 +163,62 @@ def batch_loop(
     return pg_loss
 
 
+def evaluate_training(
+    env: ITLGraphEnvironment,
+    dev_df: pd.DataFrame,
+    nav_agent: ContinuousPolicyGradient,
+    hunch_llm: nn.Module,
+    steps_in_episode: int,
+    batch_size: int,
+    batch_count: int
+):
+
+    global in_dev_mode
+    num_batches = len(dev_df) // batch_size
+    nav_agent.eval()
+    hunch_llm.eval()
+    in_dev_mode = True  # TOREM: This is only for debugging
+    env.eval()
+    # env.question_embedding_module.eval()
+    assert (
+        not env.question_embedding_module.training
+    ), "The question embedding module must not be in training mode"
+
+    metrics = {
+        "dev/batch_count": [batch_count],
+        "dev/pg_loss": []
+    }
+
+    with torch.no_grad():
+        for batch_id in range(num_batches):
+            # TODO: Get the rollout working
+            mini_batch = dev_df[batch_id*batch_size:(batch_id+1)*batch_size]
+            if not isinstance(mini_batch, pd.DataFrame): # For the lsp to give me a break
+                raise RuntimeError(f"The mini batch is not a pd.DataFrame, but a {type(mini_batch)}. Please check the data loading code.")
+            if len(mini_batch) < batch_size: # We dont want to evaluate on incomplete batches
+                continue
+
+            pg_loss = batch_loop_dev(
+                env, mini_batch, nav_agent, hunch_llm, steps_in_episode
+            )
+            logger.info("Finishing inner looop of batch")
+            metrics['dev/pg_loss'].append(pg_loss.mean().item())
+        logger.info("Done with all batches")
+
+    # Average out all metrics in side metrics
+    for k,v in metrics.items():
+        metrics[k] = np.mean(v)
+
+    if wandb_run is not None:
+        wandb_run.log(metrics)
+
+    nav_agent.train()
+    hunch_llm.train()
+    env.train()
+    dev_mode = False
+    logger.info("Done with Evaluation")
+    # TODO: Implement this
+
 def train_multihopkg(
     batch_size: int,
     epochs: int,
@@ -109,6 +229,8 @@ def train_multihopkg(
     env: ITLGraphEnvironment,
     start_epoch: int,
     train_data: pd.DataFrame,
+    dev_df: pd.DataFrame,
+    mbatches_b4_eval: int,
 ):
     # TODO: Get the rollout working
 
@@ -126,111 +248,55 @@ def train_multihopkg(
         filter(lambda p: p.requires_grad, nav_agent.parameters()), lr=learning_rate
     )
 
+    # Variable to pass for logging
+    batch_count = 0
+
+    ########################################
+    # Epoch Loop
+    ########################################
     for epoch_id in range(start_epoch, epochs):
         logger.info("Epoch {}".format(epoch_id))
         # TODO: Perhaps evaluate the epochs?
 
         # Set in training mode
         nav_agent.train()
-
-        # TOREM: Perhapas no need for this shuffle.
         batch_rewards = []
         entropies = []
 
-        # TODO: Understand if this is actually necessary here
-        # if self.run_analysis:
-        #     rewards = None
-        #     fns = None
-
         ##############################
-        # Batch Iteration Starts Here.
+        # Batch Loop
         ##############################
         # TODO: update the parameters.
         for sample_offset_idx in tqdm(range(0, len(train_data), batch_size)):
+            ########################################
+            # Training
+            ########################################
             mini_batch = train_data[sample_offset_idx : sample_offset_idx + batch_size]
             assert isinstance(mini_batch, pd.DataFrame) # For the lsp to give me a break
             optimizer.zero_grad()
-            reinforce_terms = batch_loop(
+            pg_loss = batch_loop(
                  env, mini_batch, nav_agent, hunch_llm, steps_in_episode
             )
-            reinforce_terms_mean = reinforce_terms.mean()
+            if torch.isnan(pg_loss).any():
+                logger.error("NaN detected in the loss. Aborting training.")
+                pdb.set_trace()
+            reinforce_terms_mean = pg_loss.mean()
+
             batch_rewards.append(reinforce_terms_mean.item())
             reinforce_terms_mean.backward()
-
-
             optimizer.step()
 
-            # TODO: Do something with the mini batch
-        # TODO: Check on the metrics:
-        # Check training statistics
-        # stdout_msg = 'Epoch {}: average training loss = {}'.format(epoch_id, np.mean(batch_losses))
-        # if entropies:
-        #     stdout_msg += ' entropy = {}'.format(np.mean(entropies))
-        # print(stdout_msg)
-        # self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id)
-        # if self.run_analysis:
-        #     print('* Analysis: # path types seen = {}'.format(self.num_path_types))
-        #     num_hits = float(rewards.sum())
-        #     hit_ratio = num_hits / len(rewards)
-        #     print('* Analysis: # hits = {} ({})'.format(num_hits, hit_ratio))
-        #     num_fns = float(fns.sum())
-        #     fn_ratio = num_fns / len(fns)
-        #     print('* Analysis: false negative ratio = {}'.format(fn_ratio))
-        #
-        # # Check dev set performance
-        # if self.run_analysis or (epoch_id > 0 and epoch_id % self.num_peek_epochs == 0):
-        #     self.eval()
-        #     self.batch_size = self.dev_batch_size
-        #     dev_scores = self.forward(dev_data, verbose=False)
-        #     print('Dev set performance: (correct evaluation)')
-        #     _, _, _, _, mrr = src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.dev_objects, verbose=True)
-        #     metrics = mrr
-        #     print('Dev set performance: (include test set labels)')
-        #     src.eval.hits_and_ranks(dev_data, dev_scores, self.kg.all_objects, verbose=True)
-        #     # Action dropout anneaking
-        #     if self.model.startswith('point'):
-        #         eta = self.action_dropout_anneal_interval
-        #         if len(dev_metrics_history) > eta and metrics < min(dev_metrics_history[-eta:]):
-        #             old_action_dropout_rate = self.action_dropout_rate
-        #             self.action_dropout_rate *= self.action_dropout_anneal_factor
-        #             print('Decreasing action dropout rate: {} -> {}'.format(
-        #                 old_action_dropout_rate, self.action_dropout_rate))
-        #     # Save checkpoint
-        #     if metrics > best_dev_metrics:
-        #         self.save_checkpoint(checkpoint_id=epoch_id, epoch_id=epoch_id, is_best=True)
-        #         best_dev_metrics = metrics
-        #         with open(os.path.join(self.model_dir, 'best_dev_iteration.dat'), 'w') as o_f:
-        #             o_f.write('{}'.format(epoch_id))
-        #     else:
-        #         # Early stopping
-        #         if epoch_id >= self.num_wait_epochs and metrics < np.mean(dev_metrics_history[-self.num_wait_epochs:]):
-        #             break
-        #     dev_metrics_history.append(metrics)
-        #     if self.run_analysis:
-        #         num_path_types_file = os.path.join(self.model_dir, 'num_path_types.dat')
-        #         dev_metrics_file = os.path.join(self.model_dir, 'dev_metrics.dat')
-        #         hit_ratio_file = os.path.join(self.model_dir, 'hit_ratio.dat')
-        #         fn_ratio_file = os.path.join(self.model_dir, 'fn_ratio.dat')
-        #         if epoch_id == 0:
-        #             with open(num_path_types_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(self.num_path_types))
-        #             with open(dev_metrics_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(metrics))
-        #             with open(hit_ratio_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(hit_ratio))
-        #             with open(fn_ratio_file, 'w') as o_f:
-        #                 o_f.write('{}\n'.format(fn_ratio))
-        #         else:
-        #             with open(num_path_types_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(self.num_path_types))
-        #             with open(dev_metrics_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(metrics))
-        #             with open(hit_ratio_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(hit_ratio))
-        #             with open(fn_ratio_file, 'a') as o_f:
-        #                 o_f.write('{}\n'.format(fn_ratio))
-        #
-        #
+            batch_count += 1 
+
+            ########################################
+            # Evaluation 
+            ########################################
+            logger.warn("Entering evaluation")
+            if batch_count % mbatches_b4_eval == 0:
+                evaluate_training(env, dev_df, nav_agent, hunch_llm, steps_in_episode, batch_size, batch_count)
+
+
+
 
 
 def initialize_path(questions: torch.Tensor):
@@ -279,10 +345,8 @@ def rollout(
         questions: Questions already pre-embedded to be answered (num_rollouts, question_dim)
         visualize_action_probs: If set, save action probabilities for visualization.
     returns: 
-        - log_action_probs: 
-        - action_entropy: 
-        - path_trace: 
-        - path_components:
+        - log_action_probs (torch.TEnsor): For REINFORCE 
+        - rewards (torch.Tensor):  I mean, also for REINFOCE
     """
 
     assert steps_in_episode > 0
@@ -331,6 +395,9 @@ def rollout(
         ########################################
         # Log Stuff for across batch
         ########################################
+        logger.warn(f"Am I in dev mode? {in_dev_mode}")
+        if in_dev_mode:
+            logger.debug("In dev mode. Stopppinng before preprending log_probs")
         log_action_probs.append(log_probs)
 
         # pn.update_path(action, kg) # TODO: Confirm this is actually needed
@@ -369,15 +436,35 @@ def load_qa_data(cached_metadata_path: str, raw_QAData_path, tokenizer_name: str
             text_tokenizer,
         )
         logger.info(f"Done. Result dumped at : \n\033[93m\033[4m{train_metadata['saved_path']}\033[0m")
-    return train_df, train_metadata
+
+    ########################################
+    # Train Validation Test split
+    ########################################
+
+    # Shuffle the Questions
+    shuffled_train_df = train_df.sample(frac=1).reset_index(drop=True)
+    train_df, val_df = train_test_split(shuffled_train_df, test_size=0.2, random_state=42)
+
+    return train_df, val_df, train_metadata
 
 def main():
     # By default we run the config
     # Process data will determine by itself if there is any data to process
     args, tokenizer, logger = initial_setup()
+    global wandb_run
 
     # TODO: Muybe ? (They use it themselves)
     # initialize_model_directory(args, args.seed)
+    if args.wandb:
+        logger.info(
+            f"🪄 Initializing Weights and Biases. Under project name {args.wandb_project_name} and run name {args.wr_name}"
+        )
+        wandb_run = wandb.init(
+            project=args.wandb_project_name,
+            name=args.wr_name,
+            config=vars(args),
+            notes=args.wr_notes,
+        )
 
     ## Agent needs a Knowledge graph as well as the environment
     logger.info(":: Setting up the knowledge graph")
@@ -476,7 +563,9 @@ def main():
     # Get the data
     ########################################
     logger.info(":: Setting up the data")
-    train_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
+    train_df,dev_df, train_metadata = load_qa_data(args.cached_QAMetaData_path, args.raw_QAData_path, args.tokenizer_name)
+    if not isinstance(dev_df, pd.DataFrame) or not isinstance(train_df, pd.DataFrame):
+        raise RuntimeError("The data was not loaded properly. Please check the data loading code.")
 
     # TODO: Load the validation data
     # dev_path = os.path.join(args.data_dir, "dev.triples")
@@ -502,8 +591,11 @@ def main():
         steps_in_episode = args.num_rollout_steps,
         env = env, 
         start_epoch = args.start_epoch,
-        train_data = train_df
+        train_data = train_df,
+        dev_df = dev_df,
+        mbatches_b4_eval = args.batches_b4_eval,
     )
+    logger.info("Done with everything. Exiting...")
 
     # TODO: Evaluation of the model
     # metrics = inference(lf)

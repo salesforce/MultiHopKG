@@ -57,6 +57,13 @@ def get_args() -> argparse.Namespace:
     ap.add_argument('--further_train_hunchs_llm',  action="store_true", help="Whether to further pretrain the language model or not (default: False)")
     ap.add_argument('--pretrained_llm_for_hunch', type=str, default="bert-base-uncased", help="The pretrained language model to use (default: bert-base-uncased)")
     ap.add_argument('--pretrained_llm_transformer_ckpnt_path', type=str, default="models/itl/pretrained_transformer_e1_s9176.ckpt", help="The path to the pretrained language model transformer weights (default: models/itl/pretrained_transformer_e1_s9176.ckpt)")
+
+    # Wand DB Modell
+    ap.add_argument("-w", "--wandb", action="store_true")
+    ap.add_argument("--wandb_project_name", help="wandb: Project name label", type=str)
+    ap.add_argument("--wr_name", help="wandb: Run Namel label", type=str)
+    ap.add_argument("--wr_notes", help="wand:  Run Notes", type=str)
+
     # These are based on Halcyon/FoundationalLanguageModel
     # TODO: We should have checkpoitns have this informaiton encoded in them.
     ap.add_argument("--llm_model_dim", default=768)
@@ -66,6 +73,7 @@ def get_args() -> argparse.Namespace:
     ap.add_argument("--llm_ff_dropout_rate", default=0.1)
     ap.add_argument("--llm_dropout_rate", default=0.1)
     ap.add_argument("--max_seq_length", default=1024)
+    ap.add_argument('--batches_b4_eval', type=int, default=1, help='Number of batches to run before evaluation (default: 100)')
 
 
     # NOTE: Legacy Parameters
