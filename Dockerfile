@@ -27,9 +27,9 @@ ENV PATH /opt/conda/bin:$PATH
 
 RUN conda install -c pytorch pytorch=0.4.1 cuda90
 
-RUN pip install --upgrade pip
-RUN pip install tqdm==4.9.0 &&\
-     pip install matplotlib==2.1.2
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir tqdm==4.9.0 &&\
+     pip install --no-cache-dir matplotlib==2.1.2
 
 WORKDIR /workspace
 RUN mkdir MultiHopKG
